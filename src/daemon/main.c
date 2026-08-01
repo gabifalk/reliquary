@@ -4,6 +4,7 @@
 #include "server.h"
 #include "session.h"
 #include "crypto.h"
+#include "seccomp.h"
 #include "log.h"
 #include <assuan.h>
 #include <stdio.h>
@@ -201,6 +202,20 @@ main(int argc, char **argv)
 	} else {
 		snprintf(store_root, sizeof(store_root), "%s/%u",
 			 DEFAULT_STORE, (unsigned)getuid());
+	}
+
+	/*
+	 * Lock down the syscall surface now that the listening socket exists
+	 * (the filter denies socket()/connect()). Inherited across fork(), so it
+	 * covers every connection child. Fail closed like verify_setgid(): if the
+	 * hardening cannot be applied, do not serve without it.
+	 */
+	if (seccomp_install() != 0) {
+		log_error("cannot install seccomp filter (unsupported arch "
+			"or no kernel seccomp support); refusing to start. "
+			"Set RELIQUARY_SKIP_SECCOMP to run without it "
+			"(dev/test only).");
+		return 1;
 	}
 
 	log_debug("listening on %s%s", socket_path,

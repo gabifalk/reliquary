@@ -25,6 +25,13 @@ test('secmem', executable('test_secmem',
   dependencies: reliquary_core_dep,
 ))
 
+test('seccomp', executable('test_seccomp',
+  'test_seccomp.c',
+  '../src/daemon/seccomp.c',
+  include_directories: daemon_inc,
+  dependencies: reliquary_core_dep,
+))
+
 test('crypto_rsa', executable('test_crypto_rsa',
   'test_crypto_rsa.c',
   dependencies: reliquary_core_dep,
