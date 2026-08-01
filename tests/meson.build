@@ -29,6 +29,11 @@ test('crypto_rsa', executable('test_crypto_rsa',
   dependencies: reliquary_core_dep,
 ), timeout: 60)
 
+test('crypto_ec', executable('test_crypto_ec',
+  'test_crypto_ec.c',
+  dependencies: reliquary_core_dep,
+))
+
 test('setgid_check', find_program('test_setgid_check.sh'),
   workdir: meson.project_build_root(),
 )

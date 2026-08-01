@@ -2,6 +2,7 @@
 
 reliquary_core_sources = files(
   'crypto.c',
+  'crypto_ec.c',
   'crypto_rsa.c',
   'hex.c',
   'log.c',
