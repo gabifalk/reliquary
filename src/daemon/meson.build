@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-daemon_sources = files('server.c')
+daemon_sources = files('tokenstore.c', 'server.c')
 daemon_inc = include_directories('.')
 
 reliquaryd = executable('reliquaryd',
