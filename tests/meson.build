@@ -113,3 +113,15 @@ test('openpgp_fpr',
   ],
   timeout: 60,
 )
+
+# Regression test: on-disk key files must be 0600 and token dirs 0700,
+# independent of the caller's umask.
+test('store_perms',
+  find_program('sh'),
+  args: [
+    files('test_store_perms.sh'),
+    reliquaryd.full_path(),
+    reliquary_tool.full_path(),
+  ],
+  timeout: 60,
+)

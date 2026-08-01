@@ -772,6 +772,105 @@ store_key_into_slot(const char *store_path, const char *label, int slot,
 }
 
 /*
+ * GENKEY <slot> <algorithm> [<additions>]
+ * Generate a key in a specific slot. Requires OPEN_SESSION + LOGIN.
+ * slot: 0=sign, 1=encrypt, 2=auth (or OPENPGP.1, OPENPGP.2, OPENPGP.3)
+ * algorithm: rsa2048, rsa3072, rsa4096,
+ *            nistp256, nistp384, nistp521, ed25519
+ * additions: optional comma-separated dotted-token list merged into this slot's
+ *            allowed-mechanism set on top of the algorithm/slot default.
+ */
+gpg_error_t
+cmd_genkey(assuan_context_t ctx, char *line)
+{
+	session_t *sess = assuan_get_pointer(ctx);
+	if (!sess->logged_in || !sess->mk)
+		return gpg_error(GPG_ERR_NOT_INITIALIZED);
+
+	char *rest = line;
+	char *slot_str = next_token(&rest);
+	char *algo = next_token(&rest);
+	char *additions = next_token(&rest);
+
+	if (!slot_str || !algo)
+		return gpg_error(GPG_ERR_ASS_SYNTAX);
+
+	int slot;
+	if (strncmp(slot_str, "OPENPGP.", 8) == 0)
+		slot = atoi(slot_str + 8) - 1;
+	else
+		slot = atoi(slot_str);
+	if (slot < 0 || slot >= RELIQUARY_NUM_SLOTS)
+		return gpg_error(GPG_ERR_ASS_SYNTAX);
+
+	unsigned char *key = NULL;
+	size_t key_len = 0;
+	int rc;
+
+	if (strncmp(algo, "rsa", 3) == 0) {
+		unsigned int nbits = (unsigned int)atoi(algo + 3);
+		if (nbits != 2048 && nbits != 3072 && nbits != 4096)
+			return gpg_error(GPG_ERR_NOT_SUPPORTED);
+		rc = crypto_rsa_keygen(nbits, &key, &key_len);
+	} else if (strcmp(algo, "nistp256") == 0) {
+		rc = crypto_ec_keygen("NIST P-256", &key, &key_len);
+	} else if (strcmp(algo, "nistp384") == 0) {
+		rc = crypto_ec_keygen("NIST P-384", &key, &key_len);
+	} else if (strcmp(algo, "nistp521") == 0) {
+		rc = crypto_ec_keygen("NIST P-521", &key, &key_len);
+	} else if (strcmp(algo, "ed25519") == 0) {
+		rc = crypto_ec_keygen("Ed25519", &key, &key_len);
+	} else {
+		return gpg_error(GPG_ERR_NOT_SUPPORTED);
+	}
+
+	if (rc != 0) {
+		secure_free(key, key_len);
+		return gpg_error(GPG_ERR_GENERAL);
+	}
+
+	/*
+	 * Persist through the shared store path -- it seals the key file,
+	 * extracts and records the public key, and merges the slot's mechanism
+	 * policy.  This is the same path IMPORT_SLOT uses, so a generated key
+	 * and an imported key are stored identically and cannot drift.
+	 * store_key_into_slot re-detects the algorithm from the key material;
+	 * for our own freshly generated key that matches the requested algo.
+	 */
+	char algo_out[64];
+	gpg_error_t serr = store_key_into_slot(sess->store_path,
+					       sess->token_label, slot, key,
+					       key_len, sess->mk, additions,
+					       algo_out);
+	secure_free(key, key_len);
+	if (serr)
+		return serr;
+
+	/*
+	 * Reload the freshly written key into the session so SIGN/DECRYPT work
+	 * immediately.  store_key_into_slot is store-level and deliberately does
+	 * not touch the session, so this step stays with the caller.
+	 */
+	static const char *slot_key_names[] = {
+		"sign.key.enc", "encrypt.key.enc", "auth.key.enc"
+	};
+	char kpath[768];
+	snprintf(kpath, sizeof(kpath), "%s/%s",
+		 sess->token_dir, slot_key_names[slot]);
+	if (sess->key[slot])
+		secure_free(sess->key[slot], sess->key_len[slot]);
+	sess->key[slot] = NULL;
+	sess->key_len[slot] = 0;
+	if (keyfile_open(kpath, sess->mk, &sess->key[slot],
+			 &sess->key_len[slot]) == 0)
+		strncpy(sess->algorithm[slot], algo_out,
+			sizeof(sess->algorithm[slot]) - 1);
+
+	log_debug("GENKEY token=%s slot=%d -> ok", sess->token_label, slot);
+	return 0;
+}
+
+/*
  * IMPORT_SLOT <slot> [<additions>]
  * Store a caller-supplied private-key S-expression into a slot. The key is
  * sent out-of-band via INQUIRE KEYDATA (it exceeds the Assuan line limit).

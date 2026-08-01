@@ -177,6 +177,44 @@ struct login_inq_fixture {
 	assuan_context_t ctx;
 };
 
+static gpg_error_t
+login_inq_cb(void *opaque, const char *name)
+{
+	struct login_inq_fixture *f = opaque;
+	if (strncmp(name, "NEEDPIN", 7) == 0)
+		return assuan_send_data(f->ctx, "1234", 4);
+	return gpg_error(GPG_ERR_ASS_UNKNOWN_INQUIRE);
+}
+
+/*
+ * LOGIN with no inline PIN mirrors the scd-proxy's CHECKPIN->LOGIN
+ * translation, which has no PIN to send inline and relies on the daemon
+ * raising NEEDPIN on demand (like IMPORT_SLOT's, see
+ * test_import_slot_needpin_on_demand).
+ */
+TEST(test_login_empty_needpin)
+{
+	setup();
+	create_test_token("mykey", "1234", "rsa2048");
+	assuan_context_t ctx;
+	pid_t pid;
+	ASSERT_EQ(test_server_start(store, &ctx, &pid), 0);
+	ASSERT_EQ(test_command_ok(ctx, "OPEN_SESSION mykey"), (gpg_error_t) 0);
+
+	struct login_inq_fixture f = { ctx };
+	gpg_error_t err = assuan_transact(ctx, "LOGIN", NULL, NULL,
+					  login_inq_cb, &f, NULL, NULL);
+	ASSERT_EQ(err, (gpg_error_t) 0);
+
+	/* Login succeeded: GENKEY, gated directly on sess->logged_in (no
+	   NEEDPIN prompt of its own), now works -- a subsequent op sees the
+	   session as logged in. */
+	ASSERT_EQ(test_command_ok(ctx, "GENKEY 1 rsa2048"), (gpg_error_t) 0);
+
+	test_server_stop(ctx, pid);
+	cleanup();
+}
+
 TEST(test_list_tokens)
 {
 	setup();
@@ -586,6 +624,53 @@ TEST(test_import_unsupported_curve_rejected)
 	cleanup();
 }
 
+/*
+ * GENKEY must populate the slot's allowed_mechs metadata with the
+ * mechpolicy default set for (algo, slot); an optional trailing additions
+ * argument is merged in on top of the default. Purely additive -- nothing
+ * enforces allowed_mechs yet.
+ */
+TEST(test_genkey_sets_allowed_mechs)
+{
+	setup();
+	create_test_token("mechtok", "1234", "rsa2048");
+	assuan_context_t ctx;
+	pid_t pid;
+	ASSERT_EQ(test_server_start(store, &ctx, &pid), 0);
+
+	ASSERT_EQ(test_command_ok(ctx, "OPEN_SESSION mechtok"), (gpg_error_t) 0);
+	ASSERT_EQ(test_command_ok(ctx, "LOGIN 1234"), (gpg_error_t) 0);
+
+	char mpath[768];
+	{
+		char tpath[512];
+		tokenstore_token_path(store, "mechtok", tpath, sizeof(tpath));
+		snprintf(mpath, sizeof(mpath), "%s/metadata", tpath);
+	}
+
+	/* No additions: the encrypt slot gets exactly the default set. */
+	ASSERT_EQ(test_command_ok(ctx, "GENKEY 1 rsa2048"), (gpg_error_t) 0);
+
+	token_meta_t m = { 0 };
+	ASSERT_EQ(meta_read(mpath, &m), 0);
+	ASSERT_STR_EQ(m.allowed_mechs[RELIQUARY_SLOT_ENCRYPT],
+		      "decrypt.rsa-pkcs1,decrypt.rsa-oaep");
+	meta_free(&m);
+
+	/* An explicit addition is appended to the default set. */
+	ASSERT_EQ(test_command_ok(ctx, "GENKEY 1 rsa2048 decrypt.rsa-raw"),
+		  (gpg_error_t) 0);
+
+	memset(&m, 0, sizeof(m));
+	ASSERT_EQ(meta_read(mpath, &m), 0);
+	ASSERT_STR_EQ(m.allowed_mechs[RELIQUARY_SLOT_ENCRYPT],
+		      "decrypt.rsa-pkcs1,decrypt.rsa-oaep,decrypt.rsa-raw");
+	meta_free(&m);
+
+	test_server_stop(ctx, pid);
+	cleanup();
+}
+
 TEST(test_tokenstore_valid_label)
 {
 	/* Ordinary labels are accepted. */
@@ -882,6 +967,53 @@ TEST(test_import_slot_clobber_additions)
 	cleanup();
 }
 
+/*
+ * Never-announced raw RSA (#3).  decrypt.rsa-raw is usable per slot when a
+ * slot explicitly opts in, but GET_MECHANISM_LIST must never advertise it --
+ * so a client cannot discover raw RSA from the announced mechanism list.
+ */
+TEST(test_mechanism_list_never_announces_raw)
+{
+	setup();
+	create_test_token("raw", "1234", "rsa2048");
+
+	assuan_context_t ctx;
+	pid_t pid;
+	ASSERT_EQ(test_server_start(store, &ctx, &pid), 0);
+	ASSERT_EQ(test_command_ok(ctx, "OPEN_SESSION raw"), (gpg_error_t) 0);
+	ASSERT_EQ(test_command_ok(ctx, "LOGIN 1234"), (gpg_error_t) 0);
+
+	/* Opt slot 1 into raw RSA. */
+	ASSERT_EQ(test_command_ok(ctx, "GENKEY 1 rsa2048 decrypt.rsa-raw"),
+		  (gpg_error_t) 0);
+
+	/* Control: the slot really did record decrypt.rsa-raw in its allowed set. */
+	char tpath[512], mpath[768];
+	tokenstore_token_path(store, "raw", tpath, sizeof(tpath));
+	snprintf(mpath, sizeof(mpath), "%s/metadata", tpath);
+	token_meta_t m = { 0 };
+	ASSERT_EQ(meta_read(mpath, &m), 0);
+	ASSERT_NOT_NULL(m.allowed_mechs[RELIQUARY_SLOT_ENCRYPT]);
+	ASSERT(strstr(m.allowed_mechs[RELIQUARY_SLOT_ENCRYPT], "decrypt.rsa-raw")
+	       != NULL);
+	meta_free(&m);
+
+	/* GET_MECHANISM_LIST still omits it. */
+	char *data = NULL;
+	size_t dlen = 0;
+	ASSERT_EQ(test_command(ctx, "GET_MECHANISM_LIST", &data, &dlen),
+		  (gpg_error_t) 0);
+	char *tmp = malloc(dlen + 1);
+	memcpy(tmp, data, dlen);
+	tmp[dlen] = '\0';
+	ASSERT(strstr(tmp, "decrypt.rsa-raw") == NULL);
+	free(tmp);
+	free(data);
+
+	test_server_stop(ctx, pid);
+	cleanup();
+}
+
 TEST(test_mechpolicy_advertised_list)
 {
 	char buf[256];
@@ -907,6 +1039,7 @@ RUN(test_open_session);
 RUN(test_open_session_nonexistent);
 RUN(test_login_and_logout);
 RUN(test_login_wrong_pin);
+RUN(test_login_empty_needpin);
 RUN(test_list_tokens);
 RUN(test_list_tokens_status_has_serial);
 RUN(test_list_keys);
@@ -920,10 +1053,12 @@ RUN(test_disconnect_with_two_tokens);
 RUN(test_disconnect_hides_from_list_tokens);
 RUN(test_disconnect_command);
 RUN(test_import_unsupported_curve_rejected);
+RUN(test_genkey_sets_allowed_mechs);
 RUN(test_tokenstore_valid_label);
 RUN(test_create_token_rejects_traversal_label);
 RUN(test_import_slot_needpin_on_demand);
 RUN(test_import_slot_needpin_long_pin);
 RUN(test_import_slot_clobber_additions);
+RUN(test_mechanism_list_never_announces_raw);
 RUN(test_mechpolicy_advertised_list);
 TEST_MAIN_END
