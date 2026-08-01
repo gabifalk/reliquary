@@ -1,0 +1,38 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+# reliquary-setup-user -- create a per-user token store directory
+
+set -e
+
+STORE_DIR="@store_dir@"
+GROUP="@group@"
+
+usage() {
+    echo >&2 "Usage: $0 <username>"
+    echo >&2
+    echo >&2 "Creates ${STORE_DIR}/<uid>/ owned by the user, mode 0700, so"
+    echo >&2 "only that user's reliquaryd (running as them) can enter it."
+    echo >&2 "Must be run as root."
+}
+
+if [ $# -ne 1 ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    usage
+    [ "$1" = "--help" ] || [ "$1" = "-h" ] && exit 0
+    exit 1
+fi
+
+USERNAME="$1"
+UID_NUM=$(id -u "$USERNAME" 2>/dev/null) || {
+    echo >&2 "error: unknown user '${USERNAME}'"
+    exit 1
+}
+
+DIR="${STORE_DIR}/${UID_NUM}"
+
+if [ -d "$DIR" ]; then
+    echo >&2 "error: store for user '${USERNAME}' already exists at ${DIR}"
+    exit 1
+fi
+
+install -d -m 0700 -o "$USERNAME" -g "$GROUP" "$DIR"
+echo >&2 "Created store for user '${USERNAME}' (uid ${UID_NUM}) at ${DIR}"

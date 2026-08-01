@@ -21,3 +21,8 @@ test('setgid_check', find_program('test_setgid_check.sh'),
 test('socket_activation', find_program('test_socket_activation.sh'),
   workdir: meson.project_build_root(),
 )
+
+test('useradd',
+  find_program('sh'),
+  args: [files('test_useradd.sh'), useradd_script],
+)
