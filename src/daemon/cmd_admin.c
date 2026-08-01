@@ -772,6 +772,94 @@ store_key_into_slot(const char *store_path, const char *label, int slot,
 }
 
 /*
+ * IMPORT_SLOT <slot> [<additions>]
+ * Store a caller-supplied private-key S-expression into a slot. The key is
+ * sent out-of-band via INQUIRE KEYDATA (it exceeds the Assuan line limit).
+ * Requires OPEN_SESSION + LOGIN. Mirrors GENKEY but imports an existing key
+ * instead of generating one; the algorithm is auto-detected.
+ * additions: optional comma-separated dotted-token list merged into this slot's
+ *            allowed-mechanism set on top of the algorithm/slot default.
+ */
+gpg_error_t
+cmd_import_slot(assuan_context_t ctx, char *line)
+{
+	session_t *sess = assuan_get_pointer(ctx);
+
+	char *rest = line;
+	char *slot_str = next_token(&rest);
+	if (!slot_str)
+		return gpg_error(GPG_ERR_ASS_SYNTAX);
+	/*
+	 * Copy the slot and additions tokens NOW, before ensure_logged_in()
+	 * and the KEYDATA inquiry below: both may perform an assuan_inquire()
+	 * (NEEDPIN, then KEYDATA) that reuses libassuan's ctx inbound line
+	 * buffer, which `line` (and slot_str/rest) point into -- reading them
+	 * afterwards would return corrupt data.
+	 */
+	char additions_buf[256];
+	const char *additions = NULL;
+	{
+		char *a = next_token(&rest);
+		if (a && *a) {
+			snprintf(additions_buf, sizeof(additions_buf), "%s", a);
+			additions = additions_buf;
+		}
+	}
+
+	int slot;
+	if (strncmp(slot_str, "OPENPGP.", 8) == 0)
+		slot = atoi(slot_str + 8) - 1;
+	else
+		slot = atoi(slot_str);
+	if (slot < 0 || slot >= RELIQUARY_NUM_SLOTS)
+		return gpg_error(GPG_ERR_ASS_SYNTAX);
+
+	gpg_error_t lerr = ensure_logged_in(ctx, sess);
+	if (lerr)
+		return lerr;
+
+	/* Receive the private-key S-expression out-of-band. */
+	unsigned char *keydata = NULL;
+	size_t keydata_len = 0;
+	gpg_error_t err = assuan_inquire(ctx, "KEYDATA", &keydata,
+					 &keydata_len, 65536);
+	if (err)
+		return err;
+
+	char algo[64];
+	err = store_key_into_slot(sess->store_path, sess->token_label, slot,
+				  keydata, keydata_len, sess->mk, additions,
+				  algo);
+	secure_zero(keydata, keydata_len);
+	free(keydata);
+	if (err)
+		return err;
+
+	/*
+	 * Reload the key into the session so SIGN/DECRYPT work immediately.
+	 * This also re-reads the key file we just wrote and verifies it decrypts
+	 * under MK: if it does not, the slot is unusable, so fail loudly rather
+	 * than reporting success and leaving a token no login can open.
+	 */
+	if (sess->key[slot])
+		secure_free(sess->key[slot], sess->key_len[slot]);
+	sess->key[slot] = NULL;
+	sess->key_len[slot] = 0;
+	char kpath[768];
+	snprintf(kpath, sizeof(kpath), "%s/%s", sess->token_dir,
+		 (slot == 0 ? "sign.key.enc" :
+		  slot == 1 ? "encrypt.key.enc" : "auth.key.enc"));
+	if (keyfile_open(kpath, sess->mk, &sess->key[slot],
+			 &sess->key_len[slot]) != 0)
+		return gpg_error(GPG_ERR_GENERAL);
+	strncpy(sess->algorithm[slot], algo,
+		sizeof(sess->algorithm[slot]) - 1);
+
+	log_debug("IMPORT_SLOT token=%s slot=%d -> ok", sess->token_label, slot);
+	return 0;
+}
+
+/*
  * DELETE_TOKEN <label> <admin-pin>
  * Remove a token entirely.
  */
