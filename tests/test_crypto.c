@@ -69,6 +69,88 @@ TEST(test_kdf_different_salt_different_key)
 	ASSERT(memcmp(key1, key2, sizeof(key1)) != 0);
 }
 
+TEST(test_aead_roundtrip)
+{
+	unsigned char key[CRYPTO_GCM_KEY_LEN];
+	unsigned char nonce[CRYPTO_GCM_NONCE_LEN];
+	crypto_random(key, sizeof(key));
+	crypto_random(nonce, sizeof(nonce));
+
+	const unsigned char pt[] = "hello reliquary";
+	size_t pt_len = sizeof(pt);
+	unsigned char ct[sizeof(pt)];
+	unsigned char tag[CRYPTO_GCM_TAG_LEN];
+
+	ASSERT_EQ(crypto_aead_encrypt(key, nonce, pt, pt_len, ct, tag), 0);
+	ASSERT(memcmp(ct, pt, pt_len) != 0);
+
+	unsigned char decrypted[sizeof(pt)];
+	ASSERT_EQ(crypto_aead_decrypt(key, nonce, ct, pt_len, tag, decrypted),
+		  0);
+	ASSERT_MEM_EQ(decrypted, pt, pt_len);
+}
+
+TEST(test_aead_tampered_ciphertext_fails)
+{
+	unsigned char key[CRYPTO_GCM_KEY_LEN];
+	unsigned char nonce[CRYPTO_GCM_NONCE_LEN];
+	crypto_random(key, sizeof(key));
+	crypto_random(nonce, sizeof(nonce));
+
+	const unsigned char pt[] = "secret data";
+	size_t pt_len = sizeof(pt);
+	unsigned char ct[sizeof(pt)];
+	unsigned char tag[CRYPTO_GCM_TAG_LEN];
+
+	ASSERT_EQ(crypto_aead_encrypt(key, nonce, pt, pt_len, ct, tag), 0);
+	ct[0] ^= 0xff;
+
+	unsigned char decrypted[sizeof(pt)];
+	ASSERT_EQ(crypto_aead_decrypt(key, nonce, ct, pt_len, tag, decrypted),
+		  -1);
+}
+
+TEST(test_aead_tampered_tag_fails)
+{
+	unsigned char key[CRYPTO_GCM_KEY_LEN];
+	unsigned char nonce[CRYPTO_GCM_NONCE_LEN];
+	crypto_random(key, sizeof(key));
+	crypto_random(nonce, sizeof(nonce));
+
+	const unsigned char pt[] = "secret data";
+	size_t pt_len = sizeof(pt);
+	unsigned char ct[sizeof(pt)];
+	unsigned char tag[CRYPTO_GCM_TAG_LEN];
+
+	ASSERT_EQ(crypto_aead_encrypt(key, nonce, pt, pt_len, ct, tag), 0);
+	tag[0] ^= 0xff;
+
+	unsigned char decrypted[sizeof(pt)];
+	ASSERT_EQ(crypto_aead_decrypt(key, nonce, ct, pt_len, tag, decrypted),
+		  -1);
+}
+
+TEST(test_aead_wrong_key_fails)
+{
+	unsigned char key[CRYPTO_GCM_KEY_LEN];
+	unsigned char wrong_key[CRYPTO_GCM_KEY_LEN];
+	unsigned char nonce[CRYPTO_GCM_NONCE_LEN];
+	crypto_random(key, sizeof(key));
+	crypto_random(wrong_key, sizeof(wrong_key));
+	crypto_random(nonce, sizeof(nonce));
+
+	const unsigned char pt[] = "secret data";
+	size_t pt_len = sizeof(pt);
+	unsigned char ct[sizeof(pt)];
+	unsigned char tag[CRYPTO_GCM_TAG_LEN];
+
+	ASSERT_EQ(crypto_aead_encrypt(key, nonce, pt, pt_len, ct, tag), 0);
+
+	unsigned char decrypted[sizeof(pt)];
+	ASSERT_EQ(crypto_aead_decrypt
+		  (wrong_key, nonce, ct, pt_len, tag, decrypted), -1);
+}
+
 TEST_MAIN_BEGIN("test_crypto")
     RUN(test_init);
 RUN(test_random_fills_buffer);
@@ -76,4 +158,8 @@ RUN(test_random_distinct);
 RUN(test_kdf_deterministic);
 RUN(test_kdf_different_pin_different_key);
 RUN(test_kdf_different_salt_different_key);
+RUN(test_aead_roundtrip);
+RUN(test_aead_tampered_ciphertext_fails);
+RUN(test_aead_tampered_tag_fails);
+RUN(test_aead_wrong_key_fails);
 TEST_MAIN_END

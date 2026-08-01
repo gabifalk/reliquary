@@ -60,3 +60,79 @@ crypto_kdf_derive(const char *pin, size_t pin_len,
 	gcry_kdf_close(hd);
 	return err ? -1 : 0;
 }
+
+int
+crypto_aead_encrypt(const unsigned char *key,
+		    const unsigned char *nonce,
+		    const unsigned char *plaintext, size_t pt_len,
+		    unsigned char *ct_out, unsigned char *tag_out)
+{
+	gcry_error_t err;
+	gcry_cipher_hd_t hd;
+
+	err =
+	    gcry_cipher_open(&hd, GCRY_CIPHER_AES256, GCRY_CIPHER_MODE_GCM, 0);
+	if (err)
+		return -1;
+
+	err = gcry_cipher_setkey(hd, key, CRYPTO_GCM_KEY_LEN);
+	if (err)
+		goto fail;
+
+	err = gcry_cipher_setiv(hd, nonce, CRYPTO_GCM_NONCE_LEN);
+	if (err)
+		goto fail;
+
+	err = gcry_cipher_encrypt(hd, ct_out, pt_len, plaintext, pt_len);
+	if (err)
+		goto fail;
+
+	err = gcry_cipher_gettag(hd, tag_out, CRYPTO_GCM_TAG_LEN);
+	if (err)
+		goto fail;
+
+	gcry_cipher_close(hd);
+	return 0;
+
+ fail:
+	gcry_cipher_close(hd);
+	return -1;
+}
+
+int
+crypto_aead_decrypt(const unsigned char *key,
+		    const unsigned char *nonce,
+		    const unsigned char *ciphertext, size_t ct_len,
+		    const unsigned char *tag, unsigned char *pt_out)
+{
+	gcry_error_t err;
+	gcry_cipher_hd_t hd;
+
+	err =
+	    gcry_cipher_open(&hd, GCRY_CIPHER_AES256, GCRY_CIPHER_MODE_GCM, 0);
+	if (err)
+		return -1;
+
+	err = gcry_cipher_setkey(hd, key, CRYPTO_GCM_KEY_LEN);
+	if (err)
+		goto fail;
+
+	err = gcry_cipher_setiv(hd, nonce, CRYPTO_GCM_NONCE_LEN);
+	if (err)
+		goto fail;
+
+	err = gcry_cipher_decrypt(hd, pt_out, ct_len, ciphertext, ct_len);
+	if (err)
+		goto fail;
+
+	err = gcry_cipher_checktag(hd, tag, CRYPTO_GCM_TAG_LEN);
+	if (err)
+		goto fail;
+
+	gcry_cipher_close(hd);
+	return 0;
+
+ fail:
+	gcry_cipher_close(hd);
+	return -1;
+}
