@@ -86,7 +86,7 @@ test('daemon', executable('test_daemon',
   'test_daemon.c',
   daemon_sources,
   include_directories: [daemon_inc],
-  dependencies: [reliquary_core_dep, libassuan_dep],
+  dependencies: [reliquary_core_dep, libassuan_dep, gpg_error_dep],
 ))
 
 test('setgid_check', find_program('test_setgid_check.sh'),

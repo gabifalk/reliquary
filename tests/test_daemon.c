@@ -93,6 +93,122 @@ create_test_token(const char *label, const char *pin, const char *algo)
 	state_write(tpath, &st);
 }
 
+/*
+ * op_sign is called directly (no wire protocol involved) against a token
+ * whose sign slot holds a REAL RSA key -- create_test_token's default key
+ * is a fake, unsignable placeholder, so here the fake key is overwritten
+ * with a real one sealed under the token's own MK, then loaded into the
+ * session exactly as session_login would.
+ */
+TEST(test_op_sign_real_rsa_key)
+{
+	setup();
+	create_test_token("realkey", "1234", "rsa2048");
+
+	char tpath[512], kpath[540];
+	tokenstore_token_path(store, "realkey", tpath, sizeof(tpath));
+	snprintf(kpath, sizeof(kpath), "%s/sign.key.enc", tpath);
+
+	unsigned char mk[KEYWRAP_MK_LEN];
+	ASSERT_EQ(keywrap_open(tpath, "1234", 4, mk), 0);
+
+	unsigned char *key = NULL;
+	size_t key_len = 0;
+	ASSERT_EQ(crypto_rsa_keygen(2048, &key, &key_len), 0);
+
+	/* Seal the real key into the slot's key file, replacing the fake one
+	   create_test_token wrote, under the token's actual MK. */
+	ASSERT_EQ(keyfile_seal(kpath, mk, key, key_len), 0);
+	secure_free(key, key_len);
+
+	session_t sess;
+	session_init(&sess, 0, store);
+	ASSERT_EQ(session_open(&sess, "realkey"), 0);
+	ASSERT_EQ(session_login(&sess, "1234", 4), 0);
+	ASSERT_NOT_NULL(sess.key[RELIQUARY_SLOT_SIGN]);
+
+	unsigned char data[32];
+	memset(data, 0x42, sizeof(data));
+	unsigned char *sig = NULL;
+	size_t sig_len = 0;
+	gpg_error_t err = op_sign(&sess, RELIQUARY_SLOT_SIGN, "sign.rsa-pkcs1",
+				  data, sizeof(data), &sig, &sig_len);
+	ASSERT_EQ(err, (gpg_error_t) 0);
+	ASSERT_NOT_NULL(sig);
+	ASSERT(sig_len > 0);
+
+	free(sig);
+	session_destroy(&sess);
+	cleanup();
+}
+
+TEST(test_op_rejects_cross_operation_token)
+{
+	setup();
+	create_test_token("xop", "1234", "rsa2048");
+
+	char tpath[512], kpath[540];
+	tokenstore_token_path(store, "xop", tpath, sizeof(tpath));
+	snprintf(kpath, sizeof(kpath), "%s/sign.key.enc", tpath);
+
+	unsigned char mk[KEYWRAP_MK_LEN];
+	ASSERT_EQ(keywrap_open(tpath, "1234", 4, mk), 0);
+	unsigned char *key = NULL;
+	size_t key_len = 0;
+	ASSERT_EQ(crypto_rsa_keygen(2048, &key, &key_len), 0);
+	ASSERT_EQ(keyfile_seal(kpath, mk, key, key_len), 0);
+	secure_free(key, key_len);
+
+	session_t sess;
+	session_init(&sess, 0, store);
+	ASSERT_EQ(session_open(&sess, "xop"), 0);
+	ASSERT_EQ(session_login(&sess, "1234", 4), 0);
+
+	unsigned char data[32];
+	memset(data, 0x42, sizeof(data));
+	unsigned char *out = NULL;
+	size_t out_len = 0;
+
+	/* A decrypt-operation token handed to op_sign is refused. */
+	gpg_error_t e1 = op_sign(&sess, RELIQUARY_SLOT_SIGN, "decrypt.rsa-oaep",
+				 data, sizeof(data), &out, &out_len);
+	ASSERT_EQ(gpg_err_code(e1), GPG_ERR_NOT_SUPPORTED);
+	ASSERT_NULL(out);
+
+	/* A sign-operation token handed to op_decrypt is refused. */
+	gpg_error_t e2 = op_decrypt(&sess, RELIQUARY_SLOT_SIGN, "sign.rsa-pss",
+				    data, sizeof(data), &out, &out_len);
+	ASSERT_EQ(gpg_err_code(e2), GPG_ERR_NOT_SUPPORTED);
+	ASSERT_NULL(out);
+
+	session_destroy(&sess);
+	cleanup();
+}
+
+TEST(test_mechpolicy_default_set)
+{
+	ASSERT_STR_EQ(mechpolicy_default_set("rsa2048", RELIQUARY_SLOT_SIGN),
+		      "sign.rsa-pkcs1,sign.rsa-pss");
+	ASSERT_STR_EQ(mechpolicy_default_set("rsa2048", RELIQUARY_SLOT_ENCRYPT),
+		      "decrypt.rsa-pkcs1,decrypt.rsa-oaep");
+	ASSERT_STR_EQ(mechpolicy_default_set("rsa2048", RELIQUARY_SLOT_AUTH),
+		      "sign.rsa-pkcs1");
+
+	ASSERT_STR_EQ(mechpolicy_default_set("nistp256", RELIQUARY_SLOT_SIGN),
+		      "sign.ecdsa");
+	ASSERT_STR_EQ(mechpolicy_default_set("nistp256", RELIQUARY_SLOT_ENCRYPT),
+		      "derive.ecdh");
+	ASSERT_STR_EQ(mechpolicy_default_set("nistp256", RELIQUARY_SLOT_AUTH),
+		      "sign.ecdsa");
+
+	ASSERT_STR_EQ(mechpolicy_default_set("ed25519", RELIQUARY_SLOT_SIGN),
+		      "sign.eddsa");
+	ASSERT_STR_EQ(mechpolicy_default_set("ed25519", RELIQUARY_SLOT_ENCRYPT),
+		      "");
+	ASSERT_STR_EQ(mechpolicy_default_set("ed25519", RELIQUARY_SLOT_AUTH),
+		      "sign.eddsa");
+}
+
 TEST(test_connect_and_nop)
 {
 	setup();
@@ -671,6 +787,120 @@ TEST(test_genkey_sets_allowed_mechs)
 	cleanup();
 }
 
+/*
+ * The crypto ops enforce the per-slot allowed-mechanism set before doing any
+ * crypto.  A mechanism outside the effective allowed set is rejected with
+ * GPG_ERR_NOT_SUPPORTED; a mechanism inside it proceeds.
+ *
+ * Two effective-set sources are exercised here:
+ *   - sign slot: an EXPLICIT allowed_mechs of just "sign.rsa-pkcs1", so
+ *     sign.rsa-pss (a member of the *default* sign set) is rejected --
+ *     proving the stored set, not the default, is what governs.
+ *   - encrypt slot: allowed_mechs left NULL, so the effective set falls back
+ *     to mechpolicy_default_set(rsa, encrypt) = "decrypt.rsa-pkcs1,decrypt.rsa-oaep".
+ *     decrypt.rsa-raw (raw) is not in it and is rejected; decrypt.rsa-pkcs1 is.
+ */
+TEST(test_op_enforces_allowed_mechs)
+{
+	setup();
+	create_test_token("enforce", "1234", "rsa2048");
+
+	char tpath[512], skpath[540], ekpath[540], mpath[560];
+	tokenstore_token_path(store, "enforce", tpath, sizeof(tpath));
+	snprintf(skpath, sizeof(skpath), "%s/sign.key.enc", tpath);
+	snprintf(ekpath, sizeof(ekpath), "%s/encrypt.key.enc", tpath);
+	snprintf(mpath, sizeof(mpath), "%s/metadata", tpath);
+
+	unsigned char mk[KEYWRAP_MK_LEN];
+	ASSERT_EQ(keywrap_open(tpath, "1234", 4, mk), 0);
+
+	/* Real RSA key in the sign slot, sealed under the token MK. */
+	unsigned char *skey = NULL;
+	size_t skey_len = 0;
+	ASSERT_EQ(crypto_rsa_keygen(2048, &skey, &skey_len), 0);
+	ASSERT_EQ(keyfile_seal(skpath, mk, skey, skey_len), 0);
+
+	/* Real RSA key in the encrypt slot. */
+	unsigned char *ekey = NULL;
+	size_t ekey_len = 0;
+	ASSERT_EQ(crypto_rsa_keygen(2048, &ekey, &ekey_len), 0);
+	ASSERT_EQ(keyfile_seal(ekpath, mk, ekey, ekey_len), 0);
+	secure_free(skey, skey_len);
+
+	/* Populate both slots' algorithm so session_login loads their keys.
+	   Sign slot gets an EXPLICIT allowed set; encrypt slot is left NULL to
+	   exercise the default-set fallback. */
+	token_meta_t m = { 0 };
+	ASSERT_EQ(meta_read(mpath, &m), 0);
+	free(m.algorithm[RELIQUARY_SLOT_ENCRYPT]);
+	m.algorithm[RELIQUARY_SLOT_ENCRYPT] = strdup("rsa2048");
+	free(m.allowed_mechs[RELIQUARY_SLOT_SIGN]);
+	m.allowed_mechs[RELIQUARY_SLOT_SIGN] = strdup("sign.rsa-pkcs1");
+	free(m.allowed_mechs[RELIQUARY_SLOT_ENCRYPT]);
+	m.allowed_mechs[RELIQUARY_SLOT_ENCRYPT] = NULL;
+	ASSERT_EQ(meta_write(mpath, &m), 0);
+	meta_free(&m);
+
+	session_t sess;
+	session_init(&sess, 0, store);
+	ASSERT_EQ(session_open(&sess, "enforce"), 0);
+	ASSERT_EQ(session_login(&sess, "1234", 4), 0);
+	ASSERT_NOT_NULL(sess.key[RELIQUARY_SLOT_SIGN]);
+	ASSERT_NOT_NULL(sess.key[RELIQUARY_SLOT_ENCRYPT]);
+
+	unsigned char data[32];
+	memset(data, 0x42, sizeof(data));
+	unsigned char *out = NULL;
+	size_t out_len = 0;
+
+	/* SIGN: PSS is outside the explicit allowed set -> rejected. */
+	gpg_error_t err = op_sign(&sess, RELIQUARY_SLOT_SIGN, "sign.rsa-pss",
+				  data, sizeof(data), &out, &out_len);
+	ASSERT_EQ(gpg_err_code(err), GPG_ERR_NOT_SUPPORTED);
+
+	/* SIGN: sign.rsa-pkcs1 is the one allowed mechanism -> succeeds. */
+	out = NULL;
+	out_len = 0;
+	err = op_sign(&sess, RELIQUARY_SLOT_SIGN, "sign.rsa-pkcs1",
+		      data, sizeof(data), &out, &out_len);
+	ASSERT_EQ(err, (gpg_error_t) 0);
+	ASSERT_NOT_NULL(out);
+	free(out);
+
+	/* DECRYPT: raw decrypt.rsa-raw is not in the encrypt slot's default set
+	   (allowed_mechs NULL -> fallback) -> rejected. */
+	out = NULL;
+	out_len = 0;
+	err = op_decrypt(&sess, RELIQUARY_SLOT_ENCRYPT, "decrypt.rsa-raw",
+			 data, sizeof(data), &out, &out_len);
+	ASSERT_EQ(gpg_err_code(err), GPG_ERR_NOT_SUPPORTED);
+
+	/* DECRYPT: decrypt.rsa-pkcs1 is in the default set -> allowed; verify a real
+	   round-trip so this proves the op ran, not just that policy passed. */
+	unsigned char *epub = NULL;
+	size_t epub_len = 0;
+	ASSERT_EQ(crypto_rsa_extract_pubkey(ekey, ekey_len, &epub, &epub_len), 0);
+	secure_free(ekey, ekey_len);
+	unsigned char *ct = NULL;
+	size_t ct_len = 0;
+	ASSERT_EQ(crypto_rsa_encrypt_pkcs1(epub, epub_len, data, sizeof(data),
+					   &ct, &ct_len), 0);
+	free(epub);
+	out = NULL;
+	out_len = 0;
+	err = op_decrypt(&sess, RELIQUARY_SLOT_ENCRYPT, "decrypt.rsa-pkcs1",
+			 ct, ct_len, &out, &out_len);
+	free(ct);
+	ASSERT_EQ(err, (gpg_error_t) 0);
+	ASSERT_NOT_NULL(out);
+	ASSERT_EQ(out_len, sizeof(data));
+	ASSERT_EQ(memcmp(out, data, sizeof(data)), 0);
+	secure_free(out, out_len);
+
+	session_destroy(&sess);
+	cleanup();
+}
+
 TEST(test_tokenstore_valid_label)
 {
 	/* Ordinary labels are accepted. */
@@ -917,6 +1147,29 @@ TEST(test_import_slot_needpin_long_pin)
  * handler were reordered to parse an argument after the inquiry.
  */
 
+/* Token with a real nistp256 key in ONE slot and every other slot empty
+   (create_test_token seeds a fake key in slot 0, which we drop here), so a
+   clobbered slot argument -- atoi() on the overwritten bytes yields 0 --
+   resolves to an empty slot and is distinguishable via NO_SECKEY. */
+static void
+make_token_key_in_slot(const char *label, const char *pin, int slot)
+{
+	create_test_token(label, pin, "nistp256");
+	char tpath[512], sign_key[560];
+	tokenstore_token_path(store, label, tpath, sizeof(tpath));
+	snprintf(sign_key, sizeof(sign_key), "%s/sign.key.enc", tpath);
+	unlink(sign_key);	/* drop the fake slot-0 key -> slot 0 empty */
+	unsigned char mk[KEYWRAP_MK_LEN];
+	ASSERT_EQ(keywrap_open(tpath, pin, strlen(pin), mk), 0);
+	unsigned char *key = NULL;
+	size_t key_len = 0;
+	ASSERT_EQ(crypto_ec_keygen("nistp256", &key, &key_len), 0);
+	char algo[64] = { 0 };
+	ASSERT_EQ(store_key_into_slot(store, label, slot, key, key_len, mk, NULL,
+				      algo), (gpg_error_t) 0);
+	secure_free(key, key_len);
+}
+
 struct crypto_inq_fixture {
 	assuan_context_t ctx;
 	const char *pin;		/* answer to NEEDPIN */
@@ -924,9 +1177,105 @@ struct crypto_inq_fixture {
 	size_t data_len;
 };
 
+static gpg_error_t
+crypto_inq_cb(void *opaque, const char *name)
+{
+	struct crypto_inq_fixture *f = opaque;
+	if (strncmp(name, "NEEDPIN", 7) == 0)
+		return assuan_send_data(f->ctx, f->pin, strlen(f->pin));
+	return assuan_send_data(f->ctx, f->data, f->data_len);
+}
+
 struct byte_sink {
 	size_t len;
 };
+
+static gpg_error_t
+byte_sink_cb(void *opaque, const void *data, size_t len)
+{
+	(void)data;
+	((struct byte_sink *)opaque)->len += len;
+	return 0;
+}
+
+TEST(test_sign_clobber_long_pin)
+{
+	setup();
+	make_token_key_in_slot("sgn", "longpassphrase12", 2);
+
+	assuan_context_t ctx;
+	pid_t pid;
+	ASSERT_EQ(test_server_start(store, &ctx, &pid), 0);
+
+	/* No LOGIN: SIGN raises NEEDPIN; the long reply overwrites the tail of the
+	   inbound buffer where "2 sign.ecdsa" lives. The slot (2) and mechanism are
+	   captured before the inquiry, so the sign runs against slot 2's key and
+	   succeeds; a regression that parsed the slot after the inquiry would hit
+	   empty slot 0 -> NO_SECKEY. */
+	unsigned char msg[32];
+	memset(msg, 0x5a, sizeof(msg));
+	struct crypto_inq_fixture f =
+	    { ctx, "longpassphrase12", msg, sizeof(msg) };
+	struct byte_sink sink = { 0 };
+	gpg_error_t err = assuan_transact(ctx, "SIGN 2 sign.ecdsa",
+					  byte_sink_cb, &sink,
+					  crypto_inq_cb, &f, NULL, NULL);
+	ASSERT_EQ(err, (gpg_error_t) 0);
+	ASSERT(sink.len > 0);
+
+	test_server_stop(ctx, pid);
+	cleanup();
+}
+
+TEST(test_decrypt_clobber_long_pin)
+{
+	setup();
+	make_token_key_in_slot("dec", "longpassphrase12", 2);
+
+	assuan_context_t ctx;
+	pid_t pid;
+	ASSERT_EQ(test_server_start(store, &ctx, &pid), 0);
+
+	/* slot 2 holds an EC key whose allowed set is {sign.ecdsa}; DECRYPT with
+	   decrypt.rsa-pkcs1 therefore reaches slot 2 and is rejected NOT_SUPPORTED.
+	   A clobbered slot argument would resolve to empty slot 0 and return
+	   NO_SECKEY instead, so NOT_SUPPORTED proves slot 2 survived the NEEDPIN
+	   reply. */
+	unsigned char ct[8] = { 0 };
+	struct crypto_inq_fixture f =
+	    { ctx, "longpassphrase12", ct, sizeof(ct) };
+	gpg_error_t err = assuan_transact(ctx, "DECRYPT 2 decrypt.rsa-pkcs1",
+					  NULL, NULL, crypto_inq_cb, &f,
+					  NULL, NULL);
+	ASSERT_EQ(gpg_err_code(err), GPG_ERR_NOT_SUPPORTED);
+
+	test_server_stop(ctx, pid);
+	cleanup();
+}
+
+TEST(test_derive_clobber_long_pin)
+{
+	setup();
+	make_token_key_in_slot("der", "longpassphrase12", 2);
+
+	assuan_context_t ctx;
+	pid_t pid;
+	ASSERT_EQ(test_server_start(store, &ctx, &pid), 0);
+
+	/* As with DECRYPT: a mechanism outside slot 2's {sign.ecdsa} set reaches
+	   slot 2 and is rejected NOT_SUPPORTED, whereas a clobbered slot argument
+	   would hit empty slot 0 -> NO_SECKEY. */
+	unsigned char pk[8] = { 0 };
+	struct crypto_inq_fixture f =
+	    { ctx, "longpassphrase12", pk, sizeof(pk) };
+	gpg_error_t err = assuan_transact(ctx, "DERIVE 2 decrypt.rsa-pkcs1",
+					  NULL, NULL, crypto_inq_cb, &f,
+					  NULL, NULL);
+	ASSERT_EQ(gpg_err_code(err), GPG_ERR_NOT_SUPPORTED);
+
+	test_server_stop(ctx, pid);
+	cleanup();
+}
 
 /*
  * IMPORT_SLOT's additions token is the other value parsed alongside the slot;
@@ -1033,6 +1382,9 @@ TEST(test_mechpolicy_advertised_list)
 
 TEST_MAIN_BEGIN("test_daemon")
     ASSERT_EQ(crypto_init(), 0);
+RUN(test_op_sign_real_rsa_key);
+RUN(test_op_rejects_cross_operation_token);
+RUN(test_mechpolicy_default_set);
 RUN(test_connect_and_nop);
 RUN(test_unknown_command);
 RUN(test_open_session);
@@ -1054,11 +1406,15 @@ RUN(test_disconnect_hides_from_list_tokens);
 RUN(test_disconnect_command);
 RUN(test_import_unsupported_curve_rejected);
 RUN(test_genkey_sets_allowed_mechs);
+RUN(test_op_enforces_allowed_mechs);
 RUN(test_tokenstore_valid_label);
 RUN(test_create_token_rejects_traversal_label);
 RUN(test_import_slot_needpin_on_demand);
 RUN(test_import_slot_needpin_long_pin);
 RUN(test_import_slot_clobber_additions);
+RUN(test_sign_clobber_long_pin);
+RUN(test_decrypt_clobber_long_pin);
+RUN(test_derive_clobber_long_pin);
 RUN(test_mechanism_list_never_announces_raw);
 RUN(test_mechpolicy_advertised_list);
 TEST_MAIN_END

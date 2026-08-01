@@ -20,6 +20,9 @@ register_commands(assuan_context_t ctx)
 	assuan_register_command(ctx, "CLOSE_SESSION", cmd_close_session, NULL);
 	assuan_register_command(ctx, "LOGIN", cmd_login, NULL);
 	assuan_register_command(ctx, "LOGOUT", cmd_logout, NULL);
+	assuan_register_command(ctx, "SIGN", cmd_sign, NULL);
+	assuan_register_command(ctx, "DECRYPT", cmd_decrypt, NULL);
+	assuan_register_command(ctx, "DERIVE", cmd_derive, NULL);
 	assuan_register_command(ctx, "LIST_TOKENS", cmd_list_tokens, NULL);
 	assuan_register_command(ctx, "GET_MECHANISM_LIST",
 				cmd_get_mechanism_list, NULL);

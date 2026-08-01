@@ -156,6 +156,205 @@ cmd_logout(assuan_context_t ctx, char *line)
 }
 
 gpg_error_t
+cmd_sign(assuan_context_t ctx, char *line)
+{
+	session_t *sess = assuan_get_pointer(ctx);
+
+	/*
+	 * SIGN <slot> <mechanism> -- the data to sign travels out-of-band
+	 * via INQUIRE VALUE (raw binary; does not reliably fit hex-encoded
+	 * on one Assuan command line for large inputs).
+	 */
+	char *slot_str = skip_spaces(line);
+	char *mech = strchr(slot_str, ' ');
+	if (!mech)
+		return gpg_error(GPG_ERR_ASS_SYNTAX);
+	*mech++ = '\0';
+	mech = skip_spaces(mech);
+
+	int s = atoi(slot_str);
+	if (s < 0 || s >= RELIQUARY_NUM_SLOTS)
+		return gpg_error(GPG_ERR_NO_SECKEY);
+
+	/*
+	 * Copy the mechanism out of the line buffer before calling
+	 * ensure_logged_in()/assuan_inquire() below -- both may perform an
+	 * assuan_inquire() (NEEDPIN, then VALUE) that reuses that buffer, so
+	 * a pointer into it (mech) would otherwise be left dangling into
+	 * whatever the inquiry response overwrote it with.
+	 */
+	char mech_buf[64];
+	snprintf(mech_buf, sizeof(mech_buf), "%s", mech);
+
+	/*
+	 * Not logged in yet (e.g. a caller that skipped LOGIN, such as the
+	 * scd-proxy): prompt for the PIN via NEEDPIN now.  No-op if already
+	 * logged in.
+	 */
+	gpg_error_t login_err = ensure_logged_in(ctx, sess);
+	if (login_err)
+		return login_err;
+
+	if (!sess->key[s])
+		return gpg_error(GPG_ERR_NO_SECKEY);
+
+	unsigned char *data = NULL;
+	size_t data_len = 0;
+	gpg_error_t inq_err = assuan_inquire(ctx, "VALUE", &data,
+					    &data_len, 65536);
+	if (inq_err)
+		return inq_err;
+
+	unsigned char *sig = NULL;
+	size_t sig_len = 0;
+	gpg_error_t op_err = op_sign(sess, s, mech_buf, data, data_len,
+				     &sig, &sig_len);
+	log_debug("SIGN slot=%d mech=%s -> %s", s, mech_buf,
+		  op_err ? gpg_strerror(op_err) : "ok");
+	log_debug2("SIGN in=%zu out=%zu bytes", data_len, sig_len);
+	free(data);
+	if (op_err)
+		return op_err;
+
+	gpg_error_t err = assuan_send_data(ctx, sig, sig_len);
+	free(sig);
+	return err;
+}
+
+gpg_error_t
+cmd_decrypt(assuan_context_t ctx, char *line)
+{
+	session_t *sess = assuan_get_pointer(ctx);
+
+	/*
+	 * DECRYPT <slot> <mechanism> -- the ciphertext travels out-of-band via
+	 * INQUIRE CIPHERTEXT (raw binary; a large ciphertext -- e.g. a 512-byte
+	 * rsa4096 block, 1024 chars once hex-encoded -- does not reliably fit on
+	 * one Assuan command line together with the slot/mechanism prefix).
+	 */
+	char *slot_str = skip_spaces(line);
+	char *mech = strchr(slot_str, ' ');
+	if (!mech)
+		return gpg_error(GPG_ERR_ASS_SYNTAX);
+	*mech++ = '\0';
+	mech = skip_spaces(mech);
+
+	int s = atoi(slot_str);
+	if (s < 0 || s >= RELIQUARY_NUM_SLOTS)
+		return gpg_error(GPG_ERR_NO_SECKEY);
+
+	/*
+	 * Copy the mechanism out of the line buffer before calling
+	 * ensure_logged_in()/assuan_inquire() below -- both may perform an
+	 * assuan_inquire() (NEEDPIN, then CIPHERTEXT) that reuses that
+	 * buffer, so a pointer into it (mech) would otherwise be left
+	 * dangling into whatever the inquiry response overwrote it with.
+	 */
+	char mech_buf[64];
+	snprintf(mech_buf, sizeof(mech_buf), "%s", mech);
+
+	/*
+	 * Not logged in yet (e.g. a caller that skipped LOGIN, such as the
+	 * scd-proxy): prompt for the PIN via NEEDPIN now.  No-op if already
+	 * logged in.
+	 */
+	gpg_error_t login_err = ensure_logged_in(ctx, sess);
+	if (login_err)
+		return login_err;
+
+	if (!sess->key[s])
+		return gpg_error(GPG_ERR_NO_SECKEY);
+
+	unsigned char *data = NULL;
+	size_t data_len = 0;
+	gpg_error_t inq_err = assuan_inquire(ctx, "CIPHERTEXT", &data,
+					    &data_len, 65536);
+	if (inq_err)
+		return inq_err;
+
+	unsigned char *pt = NULL;
+	size_t pt_len = 0;
+	gpg_error_t op_err = op_decrypt(sess, s, mech_buf, data, data_len,
+					&pt, &pt_len);
+	log_debug("DECRYPT slot=%d mech=%s -> %s", s, mech_buf,
+		  op_err ? gpg_strerror(op_err) : "ok");
+	log_debug2("DECRYPT in=%zu out=%zu bytes", data_len, pt_len);
+	free(data);
+	if (op_err)
+		return op_err;
+
+	gpg_error_t err = assuan_send_data(ctx, pt, pt_len);
+	secure_free(pt, pt_len);
+	return err;
+}
+
+gpg_error_t
+cmd_derive(assuan_context_t ctx, char *line)
+{
+	session_t *sess = assuan_get_pointer(ctx);
+
+	/*
+	 * DERIVE <slot> <mechanism> -- the peer public key travels
+	 * out-of-band via INQUIRE PEERKEY (raw binary; does not reliably
+	 * fit hex-encoded on one Assuan command line for large inputs).
+	 */
+	char *slot_str = skip_spaces(line);
+	char *mech = strchr(slot_str, ' ');
+	if (!mech)
+		return gpg_error(GPG_ERR_ASS_SYNTAX);
+	*mech++ = '\0';
+	mech = skip_spaces(mech);
+
+	int s = atoi(slot_str);
+	if (s < 0 || s >= RELIQUARY_NUM_SLOTS)
+		return gpg_error(GPG_ERR_NO_SECKEY);
+
+	/*
+	 * Copy the mechanism out of the line buffer before calling
+	 * ensure_logged_in()/assuan_inquire() below -- both may perform an
+	 * assuan_inquire() (NEEDPIN, then PEERKEY) that reuses that buffer,
+	 * so a pointer into it (mech) would otherwise be left dangling into
+	 * whatever the inquiry response overwrote it with.
+	 */
+	char mech_buf[64];
+	snprintf(mech_buf, sizeof(mech_buf), "%s", mech);
+
+	/*
+	 * Not logged in yet (e.g. a caller that skipped LOGIN, such as the
+	 * scd-proxy): prompt for the PIN via NEEDPIN now.  No-op if already
+	 * logged in.
+	 */
+	gpg_error_t login_err = ensure_logged_in(ctx, sess);
+	if (login_err)
+		return login_err;
+
+	if (!sess->key[s])
+		return gpg_error(GPG_ERR_NO_SECKEY);
+
+	unsigned char *peer_pub = NULL;
+	size_t peer_len = 0;
+	gpg_error_t inq_err = assuan_inquire(ctx, "PEERKEY", &peer_pub,
+					    &peer_len, 65536);
+	if (inq_err)
+		return inq_err;
+
+	unsigned char *secret = NULL;
+	size_t secret_len = 0;
+	gpg_error_t op_err = op_derive(sess, s, mech_buf, peer_pub, peer_len,
+				       &secret, &secret_len);
+	log_debug("DERIVE slot=%d mech=%s -> %s", s, mech_buf,
+		  op_err ? gpg_strerror(op_err) : "ok");
+	log_debug2("DERIVE in=%zu out=%zu bytes", peer_len, secret_len);
+	free(peer_pub);
+	if (op_err)
+		return op_err;
+
+	gpg_error_t err = assuan_send_data(ctx, secret, secret_len);
+	secure_free(secret, secret_len);
+	return err;
+}
+
+gpg_error_t
 cmd_list_tokens(assuan_context_t ctx, char *line)
 {
 	(void)line;
