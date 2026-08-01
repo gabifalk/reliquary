@@ -5,6 +5,7 @@ daemon_sources = files(
   'cmd_session.c',
   'crypto_op.c',
   'keygrip.c',
+  'landlock.c',
   'openpgp_fpr.c',
   'seccomp.c',
   'server.c',

@@ -5,6 +5,7 @@
 #include "session.h"
 #include "crypto.h"
 #include "seccomp.h"
+#include "landlock.h"
 #include "log.h"
 #include <assuan.h>
 #include <stdio.h>
@@ -193,7 +194,7 @@ main(int argc, char **argv)
 	/*
 	 * The store we serve is fixed for this daemon's lifetime -- our own uid's
 	 * subtree (getuid()), or the --store override. Compute it once here so it
-	 * can be reused by every child.
+	 * can bound the Landlock confinement below and be reused by every child.
 	 */
 	char store_root[512];
 	if (store_override) {
@@ -217,6 +218,17 @@ main(int argc, char **argv)
 			"(dev/test only).");
 		return 1;
 	}
+
+	/*
+	 * Confine filesystem access to our own store subtree, so a compromised
+	 * daemon cannot read or write outside it. Inherited across fork(). Best
+	 * effort: without Landlock the owner-gated store dir still enforces
+	 * per-user isolation via DAC (see Key Storage), so warn and continue.
+	 */
+	if (landlock_confine(store_root) != 0)
+		log_warn("WARNING: Landlock unavailable; continuing without "
+			"filesystem confinement (DAC still enforces "
+			"per-user isolation)");
 
 	log_debug("listening on %s%s", socket_path,
 		activated ? " (socket-activated)" : "");

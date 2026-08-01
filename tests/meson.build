@@ -32,6 +32,13 @@ test('seccomp', executable('test_seccomp',
   dependencies: reliquary_core_dep,
 ))
 
+test('landlock', executable('test_landlock',
+  'test_landlock.c',
+  '../src/daemon/landlock.c',
+  include_directories: daemon_inc,
+  dependencies: reliquary_core_dep,
+))
+
 test('crypto_rsa', executable('test_crypto_rsa',
   'test_crypto_rsa.c',
   dependencies: reliquary_core_dep,
