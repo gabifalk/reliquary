@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-reliquary_core_sources = files('hex.c')
+reliquary_core_sources = files(
+  'hex.c',
+  'log.c',
+)
 
 reliquary_core_inc = include_directories('.')
 
