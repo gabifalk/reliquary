@@ -102,6 +102,27 @@ test('useradd',
   args: [files('test_useradd.sh'), useradd_script],
 )
 
+daemon_test_inc = include_directories('../src/daemon')
+
+test('tools', executable('test_tools',
+  'test_tools.c',
+  daemon_sources,
+  include_directories: daemon_test_inc,
+  dependencies: [reliquary_core_dep, reliquary_client_dep, libassuan_dep, gpg_error_dep],
+))
+
+test_daemon_integration = executable('test_daemon_integration',
+  'test_daemon_integration.c',
+  include_directories: daemon_test_inc,
+  dependencies: [reliquary_core_dep, reliquary_client_dep, libassuan_dep, gpg_error_dep],
+)
+test('daemon_integration', test_daemon_integration,
+  env: [
+    'RELIQUARYD_PATH=' + reliquaryd.full_path(),
+    'FIXTURE_RSA4096_PATH=' + meson.current_source_dir() / 'data' / 'fixture_rsa4096.key',
+  ],
+)
+
 # Regression test: IMPORT_SLOT derives the OpenPGP v4 fingerprint from the key +
 # (created-at ...) so gpg --card-status shows a real fingerprint, not [none].
 test('openpgp_fpr',
@@ -120,6 +141,16 @@ test('store_perms',
   find_program('sh'),
   args: [
     files('test_store_perms.sh'),
+    reliquaryd.full_path(),
+    reliquary_tool.full_path(),
+  ],
+  timeout: 60,
+)
+
+test('unblock_tool',
+  find_program('sh'),
+  args: [
+    files('test_unblock.sh'),
     reliquaryd.full_path(),
     reliquary_tool.full_path(),
   ],

@@ -1065,6 +1065,61 @@ cmd_clear_token(assuan_context_t ctx, char *line)
 }
 
 /*
+ * UNBLOCK_TOKEN <label> <admin-pin>
+ * Restore a token's user-PIN retry counter to its configured maximum after
+ * verifying the admin PIN. Does not touch the keywrap: the user's existing
+ * PIN still unwraps the master key, so this recovers an accidentally locked
+ * token without destroying its keys. It cannot reset a forgotten PIN.
+ */
+gpg_error_t
+cmd_unblock_token(assuan_context_t ctx, char *line)
+{
+	session_t *sess = assuan_get_pointer(ctx);
+
+	char *rest = line;
+	char *label = next_token(&rest);
+	char *admin_pin = next_token(&rest);
+
+	if (!label || !admin_pin)
+		return gpg_error(GPG_ERR_ASS_SYNTAX);
+	if (!tokenstore_valid_label(label))
+		return gpg_error(GPG_ERR_INV_NAME);
+
+	int vrc = verify_admin_pin(sess->store_path, admin_pin);
+	if (vrc == -2)
+		return gpg_error(GPG_ERR_NOT_INITIALIZED);
+	if (vrc != 0)
+		return gpg_error(GPG_ERR_BAD_PIN);
+
+	char tpath[512];
+	tokenstore_token_path(sess->store_path, label, tpath, sizeof(tpath));
+
+	char mpath[768];
+	snprintf(mpath, sizeof(mpath), "%s/metadata", tpath);
+	token_meta_t m = { 0 };
+	if (meta_read(mpath, &m) != 0)
+		return gpg_error(GPG_ERR_NOT_FOUND);
+
+	int maxr = m.pin_max_retries;
+	meta_free(&m);
+	if (maxr <= 0)			/* defensive: never reset back to locked */
+		maxr = 3;
+
+	/*
+	 * Read current state first so the disconnected flag is preserved, then
+	 * restore the retry counter to its maximum.
+	 */
+	token_state_t st = { .pin_retries = maxr, .disconnected = 0 };
+	state_read(tpath, &st);
+	st.pin_retries = maxr;
+	if (state_write(tpath, &st) != 0)
+		return gpg_error(GPG_ERR_GENERAL);
+
+	log_debug("UNBLOCK_TOKEN token=%s -> ok", label);
+	return 0;
+}
+
+/*
  * DISCONNECT_TOKEN <label>
  * Hide token from enumeration by setting disconnected in state file.
  * No PIN required.
@@ -1127,5 +1182,36 @@ cmd_connect_token(assuan_context_t ctx, char *line)
 	if (state_write(tpath, &st) != 0)
 		return gpg_error(GPG_ERR_GENERAL);
 
+	return 0;
+}
+
+/*
+ * CHANGE_PIN <new-pin>
+ * Requires: OPEN_SESSION + LOGIN
+ */
+gpg_error_t
+cmd_change_pin(assuan_context_t ctx, char *line)
+{
+	session_t *sess = assuan_get_pointer(ctx);
+	if (!sess->logged_in || !sess->mk)
+		return gpg_error(GPG_ERR_NOT_INITIALIZED);
+
+	char *new_pin = skip_spaces(line);
+	if (!*new_pin)
+		return gpg_error(GPG_ERR_ASS_SYNTAX);
+
+	/*
+	 * Re-wrap the master key under the new PIN. The slot key files are
+	 * sealed under the MK, not the PIN, so they are untouched.
+	 */
+	if (keywrap_rewrap(sess->token_dir, sess->mk, new_pin,
+			   strlen(new_pin)) != 0)
+		return gpg_error(GPG_ERR_GENERAL);
+
+	token_state_t st = { .pin_retries = 3, .disconnected = 0 };
+	state_read(sess->token_dir, &st);
+	st.pin_retries = 3;
+	state_write(sess->token_dir, &st);
+	log_debug("CHANGE_PIN token=%s -> ok", sess->token_label);
 	return 0;
 }

@@ -36,6 +36,8 @@ register_commands(assuan_context_t ctx)
 	assuan_register_command(ctx, "IMPORT_SLOT", cmd_import_slot, NULL);
 	assuan_register_command(ctx, "DELETE_TOKEN", cmd_delete_token, NULL);
 	assuan_register_command(ctx, "CLEAR_TOKEN", cmd_clear_token, NULL);
+	assuan_register_command(ctx, "UNBLOCK_TOKEN", cmd_unblock_token, NULL);
+	assuan_register_command(ctx, "CHANGE_PIN", cmd_change_pin, NULL);
 	assuan_register_command(ctx, "DISCONNECT_TOKEN",
 				cmd_disconnect_token, NULL);
 	assuan_register_command(ctx, "CONNECT_TOKEN",
