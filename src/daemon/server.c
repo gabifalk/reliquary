@@ -2,6 +2,7 @@
 
 #include "server.h"
 #include "cmd_session.h"
+#include "cmd_admin.h"
 #include <string.h>
 
 static gpg_error_t
@@ -25,6 +26,15 @@ register_commands(assuan_context_t ctx)
 	assuan_register_command(ctx, "LIST_KEYS", cmd_list_keys, NULL);
 	assuan_register_command(ctx, "GET_ATTRIBUTE", cmd_get_attribute, NULL);
 	assuan_register_command(ctx, "SET_ATTRIBUTE", cmd_set_attribute, NULL);
+	assuan_register_command(ctx, "STORE_STATUS", cmd_store_status, NULL);
+	assuan_register_command(ctx, "INIT_STORE", cmd_init_store, NULL);
+	assuan_register_command(ctx, "CREATE_TOKEN", cmd_create_token, NULL);
+	assuan_register_command(ctx, "DELETE_TOKEN", cmd_delete_token, NULL);
+	assuan_register_command(ctx, "CLEAR_TOKEN", cmd_clear_token, NULL);
+	assuan_register_command(ctx, "DISCONNECT_TOKEN",
+				cmd_disconnect_token, NULL);
+	assuan_register_command(ctx, "CONNECT_TOKEN",
+				cmd_connect_token, NULL);
 	assuan_register_command(ctx, "NOP", cmd_nop, NULL);
 }
 

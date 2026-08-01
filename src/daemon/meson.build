@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 daemon_sources = files(
+  'cmd_admin.c',
   'cmd_session.c',
   'crypto_op.c',
   'keygrip.c',
