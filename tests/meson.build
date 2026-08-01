@@ -54,6 +54,11 @@ test('meta', executable('test_meta',
   dependencies: reliquary_core_dep,
 ))
 
+test('pin', executable('test_pin',
+  'test_pin.c',
+  dependencies: reliquary_core_dep,
+))
+
 test('setgid_check', find_program('test_setgid_check.sh'),
   workdir: meson.project_build_root(),
 )

@@ -9,6 +9,7 @@ reliquary_core_sources = files(
   'keywrap.c',
   'log.c',
   'meta.c',
+  'pin.c',
   'secmem.c',
   'serial.c',
 )
