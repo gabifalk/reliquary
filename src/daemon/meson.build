@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 daemon_sources = files(
+  'keygrip.c',
   'server.c',
   'session.c',
   'tokenstore.c',
