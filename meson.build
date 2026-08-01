@@ -16,4 +16,5 @@ libassuan_dep = dependency('libassuan', version: '>=2.5.0')
 gpg_error_dep = dependency('gpg-error')
 
 subdir('src')
+subdir('man')
 subdir('tests')

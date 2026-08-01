@@ -1,0 +1,202 @@
+.\" SPDX-License-Identifier: GPL-2.0-or-later
+.TH RELIQUARY-TOOL 1 "" "reliquary @version@" "User Commands"
+.SH NAME
+reliquary\-tool \- manage Reliquary software security tokens
+.SH SYNOPSIS
+.B reliquary\-tool
+.I command
+.RI [ args ...]
+.br
+.B reliquary\-tool
+.BR \-\-help | \-h
+.SH DESCRIPTION
+.B reliquary\-tool
+is the administrative command\-line client for Reliquary. It connects to
+the per\-user Reliquary daemon over its control socket and manages
+.IR tokens ,
+each of which holds up to three key
+.IR slots .
+Once populated, tokens are exposed to applications as PKCS#11 objects and as
+GnuPG OpenPGP cards (via
+.BR reliquary\-scd\-proxy ).
+.PP
+Before a user can use
+.BR reliquary\-tool ,
+an administrator must provision that user's store directory once, as root,
+with
+.BR reliquary\-setup\-user (8).
+Thereafter
+.B reliquary\-tool
+runs entirely as the unprivileged user, and
+.B init
+sets the store's admin PIN.
+.PP
+Commands that use private keys, and PIN changes, prompt for the relevant PIN
+on the terminal with echo disabled. The daemon must already be running; if it
+cannot be reached,
+.B reliquary\-tool
+prints an error and exits non\-zero.
+.SH COMMANDS
+.TP
+.B init
+Initialize the store and set the admin PIN. Run once before any tokens are
+created.
+.TP
+.BI "create " label
+Create a new, empty token named
+.IR label .
+.TP
+.BI "delete " label
+Delete the token
+.I label
+and everything in it.
+.TP
+.BI "clear " label
+Remove all key slots from
+.IR label ,
+leaving the token in place.
+.TP
+.BI "genkey " "label slot algorithm"
+Generate a new key of
+.I algorithm
+in
+.I slot
+of
+.IR label .
+Prompts for the token PIN.
+.TP
+.BI "import-ssh " label " [" slot "] " keyfile
+Import an unencrypted OpenSSH private key from
+.IR keyfile .
+When
+.I slot
+is given, import into that slot of the existing token
+.IR label ,
+prompting for its PIN. When
+.I slot
+is omitted, create a new token
+.I label
+holding the key in its
+.B auth
+slot, prompting for a new PIN.
+.TP
+.B list
+List all tokens in the store.
+.TP
+.BI "info " label
+Show details of
+.IR label :
+its serial number, slots, and key algorithms.
+.TP
+.BI "change-pin " label
+Change the user PIN of
+.IR label .
+.TP
+.BI "disconnect " label
+Hide
+.I label
+from enumeration on the PKCS#11 and OpenPGP\-card faces, without deleting it.
+.TP
+.BI "connect " label
+Make a previously disconnected token
+.I label
+visible again.
+.TP
+.BI "unblock " label
+Reset the PIN retry counter of a locked token
+.IR label .
+Requires the admin PIN.
+.SH "SLOTS AND ALGORITHMS"
+Valid slot names are
+.BR sign ", " encrypt ", and " auth .
+.PP
+Valid key algorithms are
+.BR rsa2048 ", " rsa3072 ", " rsa4096 ", "
+.BR nistp256 ", " nistp384 ", " nistp521 ", and " ed25519 .
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Print a usage summary and exit.
+.SH ENVIRONMENT
+.TP
+.B RELIQUARY_SOCKET
+If set, the daemon control socket path to use, overriding the default.
+.TP
+.B XDG_RUNTIME_DIR
+Locates the default control socket at
+.IR $XDG_RUNTIME_DIR/reliquary/socket .
+Must be set unless
+.B RELIQUARY_SOCKET
+is given.
+.SH FILES
+.TP
+.I $XDG_RUNTIME_DIR/reliquary/socket
+Default Reliquary daemon control socket.
+.TP
+.I @store_dir@/<uid>/
+Per\-user token store managed through the daemon.
+.SH "EXIT STATUS"
+Returns 0 on success and non\-zero on error, including a wrong PIN, an unknown
+command or token, or an unreachable daemon.
+.SH EXAMPLES
+.PP
+These examples assume an administrator has already provisioned the user's
+store as root with
+.BR reliquary\-setup\-user (8),
+and that it has been initialized once with
+.BR "reliquary\-tool init" .
+.PP
+.B "As an OpenPGP card (GnuPG)."
+With
+.B gpg\-agent
+configured to use
+.B reliquary\-scd\-proxy
+as its
+.I scdaemon-program
+(so the token appears as a card), create a token and move an existing subkey
+onto it with
+.BR keytocard :
+.PP
+.RS 4
+.EX
+reliquary\-tool create gpg
+gpg \-\-edit\-key alice@example.com
+  # at the gpg> prompt: "key N" to select a subkey, then
+  # "keytocard", choose the slot, and "save".
+.EE
+.RE
+.PP
+.B "As an SSH key via PKCS#11, imported."
+Create a token, import an existing OpenSSH private key into its
+.B auth
+slot, and authenticate by pointing
+.B ssh
+at the module:
+.PP
+.RS 4
+.EX
+reliquary\-tool create ssh
+reliquary\-tool import\-ssh ssh auth ~/.ssh/id_ed25519
+ssh \-I /usr/local/lib/pkcs11/reliquary-pkcs11.so user@host
+.EE
+.RE
+.PP
+.B "As an SSH key via PKCS#11, generated."
+The same, but generate a fresh key on the token instead of importing one; its
+public half must then be published to the server:
+.PP
+.RS 4
+.EX
+reliquary\-tool create ssh
+reliquary\-tool genkey ssh auth ed25519
+ssh\-keygen \-D /usr/local/lib/pkcs11/reliquary-pkcs11.so   # add to authorized_keys
+ssh \-I /usr/local/lib/pkcs11/reliquary-pkcs11.so user@host
+.EE
+.RE
+.SH "SEE ALSO"
+.BR reliquary\-setup\-user (8),
+.BR gpg (1),
+.BR ssh (1),
+.BR ssh\-keygen (1),
+.BR ssh\-add (1),
+.BR pkcs11\-tool (1)

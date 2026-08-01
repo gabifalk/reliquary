@@ -1,0 +1,70 @@
+.\" SPDX-License-Identifier: GPL-2.0-or-later
+.TH RELIQUARY-SETUP-USER 8 "" "reliquary @version@" "System Administration"
+.SH NAME
+reliquary\-setup\-user \- provision a per\-user Reliquary token store
+.SH SYNOPSIS
+.B reliquary\-setup\-user
+.I username
+.br
+.B reliquary\-setup\-user
+.BR \-\-help | \-h
+.SH DESCRIPTION
+.B reliquary\-setup\-user
+creates the token store directory for
+.IR username ,
+namely
+.IR @store_dir@/<uid>/ ,
+where
+.I uid
+is that user's numeric ID. The directory is created mode 0700, owned by
+.IR username ,
+with group
+.BR @group@ .
+.PP
+This is a one\-time administrative step, run as root, that must precede any use
+of
+.BR reliquary\-tool (1)
+by
+.IR username .
+The per\-user directory is owner\-gated: the store root above it is traversable
+only by the
+.B @group@
+group, but this directory must admit just the one user's
+.BR reliquaryd .
+Both users' daemons run setgid
+.BR @group@ ,
+so the only DAC lever that distinguishes them is the directory owner.
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Print a usage summary and exit.
+.SH "EXIT STATUS"
+Returns 0 on success. It exits non\-zero, creating nothing, if no
+.I username
+is given, if
+.I username
+is not a known user, or if the store directory already exists.
+.SH FILES
+.TP
+.I @store_dir@/
+Reliquary store root, beneath which the per\-user directories are created.
+.TP
+.I @store_dir@/<uid>/
+Per\-user store directory this command creates.
+.SH NOTES
+If run without root privileges the command prints a warning and creates the
+directory owned by the invoking user, without setting the
+.B @group@
+group. That fallback is meant only for development and testing; a real
+deployment must run it as root so the ownership and group are correct.
+.SH EXAMPLES
+Provision the store for user
+.IR alice :
+.PP
+.RS 4
+.EX
+reliquary\-setup\-user alice
+.EE
+.RE
+.SH "SEE ALSO"
+.BR reliquary\-tool (1)

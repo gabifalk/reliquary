@@ -1,0 +1,94 @@
+.\" SPDX-License-Identifier: GPL-2.0-or-later
+.TH RELIQUARYD 1 "" "reliquary @version@" "User Commands"
+.SH NAME
+reliquaryd \- Reliquary per\-user token daemon
+.SH SYNOPSIS
+.B reliquaryd
+.RB [ \-v | \-vv ]
+.RB [ \-\-store
+.IR path ]
+.br
+.B reliquaryd
+.BR \-\-help | \-h
+.SH DESCRIPTION
+.B reliquaryd
+is the per\-user daemon at the center of Reliquary. It guards the user's token
+store and performs every private\-key operation itself, exposing them to
+clients over an Assuan control socket. It never hands key material back out:
+.BR reliquary\-tool (1),
+the PKCS#11 module, and the GnuPG scdaemon proxy all connect to it and ask it
+to sign, decrypt, or authenticate.
+.PP
+The daemon runs as the invoking user and is installed setgid
+.BR @group@ ,
+which grants it access to the store root while DAC keeps each user confined to
+their own subtree. It is normally started on demand through systemd socket
+activation rather than run by hand.
+.PP
+Each client connection is served by a forked child, and all session state
+lives in that child and dies with the connection, so the long\-lived parent
+caches no key material. The daemon runs until it is stopped or killed.
+.SH OPTIONS
+.TP
+.BR \-v ", " \-vv
+Increase log verbosity by one or two levels. The effective level is the
+greater of this and
+.BR RELIQUARY_DEBUG .
+.TP
+.BI "\-\-store " path
+Serve the store rooted at
+.I path
+instead of the default
+.IR @store_dir@/<uid>/ .
+.TP
+.BR \-h ", " \-\-help
+Print a usage summary and exit.
+.SH ENVIRONMENT
+.TP
+.B XDG_RUNTIME_DIR
+Required. The control socket is created at
+.IR $XDG_RUNTIME_DIR/reliquary/socket .
+.TP
+.B RELIQUARY_DEBUG
+Numeric log level applied when higher than the
+.BR \-v / \-vv
+flags.
+.TP
+.BR LISTEN_FDS ", " LISTEN_PID
+Set by systemd socket activation. When present, the daemon serves the
+inherited socket instead of creating its own.
+.TP
+.BR RELIQUARY_SKIP_SETGID_CHECK ", " RELIQUARY_SKIP_SECCOMP ", " RELIQUARY_SKIP_LANDLOCK
+Bypass the setgid self\-check, the seccomp filter, or the Landlock
+confinement respectively. Intended only for development and testing.
+.SH FILES
+.TP
+.I $XDG_RUNTIME_DIR/reliquary/socket
+Assuan control socket clients connect to (its directory is mode 0700).
+.TP
+.I @store_dir@/<uid>/
+Per\-user token store served by default.
+.SH SECURITY
+.B reliquaryd
+must be installed setgid
+.BR @group@ ,
+mode 2755
+.BR root:@group@ ,
+and refuses to start otherwise. At startup it installs a seccomp system\-call
+filter (refusing to start if the kernel cannot apply one), confines its
+filesystem access to the served store with Landlock where available, marks
+itself non\-dumpable and no\-new\-privileges, and clamps its umask to 0077. The
+skip variables above defeat these protections and exist only for the test
+suite.
+.SH "EXIT STATUS"
+Exits 0 for
+.BR \-\-help ;
+otherwise it runs until terminated by a signal. It exits non\-zero, without
+serving, when it refuses to start \- an unset
+.BR XDG_RUNTIME_DIR ,
+a failed setgid check, an unavailable seccomp filter, or a socket it cannot
+create \- and on an unknown option.
+.SH "SEE ALSO"
+.BR reliquary\-tool (1),
+.BR reliquary\-setup\-user (8),
+.BR systemd.socket (5)
