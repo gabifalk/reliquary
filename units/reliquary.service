@@ -1,0 +1,12 @@
+[Unit]
+Description=Reliquary key management daemon
+Requires=reliquary.socket
+
+[Service]
+ExecStart=/usr/bin/reliquaryd
+Type=simple
+# Optional per-user environment (e.g. RELIQUARY_DEBUG=2) read from
+# ~/.config/reliquary/environment.
+EnvironmentFile=-%E/reliquary/environment
+# reliquary.socket re-launches the daemon on the next connection should it
+# ever exit, so no Restart= is needed here.

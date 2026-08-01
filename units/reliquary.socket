@@ -1,0 +1,10 @@
+[Unit]
+Description=Reliquary daemon socket
+
+[Socket]
+ListenStream=%t/reliquary/socket
+DirectoryMode=0700
+SocketMode=0700
+
+[Install]
+WantedBy=sockets.target

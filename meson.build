@@ -18,3 +18,7 @@ gpg_error_dep = dependency('gpg-error')
 subdir('src')
 subdir('man')
 subdir('tests')
+
+install_data('units/reliquary.socket', 'units/reliquary.service',
+  install_dir: join_paths(get_option('prefix'), 'lib', 'systemd', 'user'),
+)
