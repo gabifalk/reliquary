@@ -1,0 +1,7 @@
+Bundled third-party sources
+===========================
+
+pkcs11.h
+  PKCS#11 consolidated header from the p11-kit project.
+  Source: https://github.com/p11-glue/p11-kit/blob/master/common/pkcs11.h
+  License: FSFAP (FSF All Permissive License)

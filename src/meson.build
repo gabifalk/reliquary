@@ -5,6 +5,7 @@ conf_cflags = [
   '-DRELIQUARY_GROUP="' + get_option('group') + '"',
 ]
 
+subdir('bundled')
 subdir('core')
 subdir('daemon')
 subdir('setup')
