@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.compiler }}, ssh-${{ matrix.openssh }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        openssh: [system, homebrew]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build pkgconf \
+            libgcrypt20-dev libassuan-dev libgpg-error-dev \
+            gnupg openssh-client opensc \
+            ${{ matrix.compiler == 'clang' && 'clang' || '' }}
+
+      - name: Install recent OpenSSH (Ed25519 PKCS#11)
+        if: matrix.openssh == 'homebrew'
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew update
+          brew install openssh
+          echo "$(brew --prefix openssh)/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        run: CC=${{ matrix.compiler }} meson setup build
+
+      - name: Build
+        run: meson compile -C build
+
+      - name: Test
+        run: meson test -C build --print-errorlogs
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testlog-${{ matrix.compiler }}-ssh-${{ matrix.openssh }}
+          path: build/meson-logs/testlog.txt
+          if-no-files-found: ignore
