@@ -10,3 +10,4 @@ subdir('daemon')
 subdir('setup')
 
 subdir('client')
+subdir('tool')
