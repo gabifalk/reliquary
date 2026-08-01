@@ -44,6 +44,11 @@ test('keywrap', executable('test_keywrap',
   dependencies: reliquary_core_dep,
 ))
 
+test('keyfile', executable('test_keyfile',
+  'test_keyfile.c',
+  dependencies: reliquary_core_dep,
+))
+
 test('setgid_check', find_program('test_setgid_check.sh'),
   workdir: meson.project_build_root(),
 )
