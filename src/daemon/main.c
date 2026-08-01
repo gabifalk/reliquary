@@ -2,6 +2,8 @@
 
 #define _GNU_SOURCE
 #include "server.h"
+#include "session.h"
+#include "crypto.h"
 #include "log.h"
 #include <assuan.h>
 #include <stdio.h>
@@ -146,7 +148,6 @@ main(int argc, char **argv)
 			return 1;
 		}
 	}
-	(void)store_override;
 
 	const char *dbg = getenv("RELIQUARY_DEBUG");
 	int env_level = dbg ? atoi(dbg) : 0;
@@ -169,6 +170,11 @@ main(int argc, char **argv)
 	snprintf(socket_path, sizeof(socket_path), "%s/socket", socket_dir);
 	mkdir(socket_dir, 0700);
 
+	if (crypto_init() != 0) {
+		log_error("failed to initialize crypto");
+		return 1;
+	}
+
 	prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
 	prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
 
@@ -181,6 +187,20 @@ main(int argc, char **argv)
 				socket_path, strerror(errno));
 			return 1;
 		}
+	}
+
+	/*
+	 * The store we serve is fixed for this daemon's lifetime -- our own uid's
+	 * subtree (getuid()), or the --store override. Compute it once here so it
+	 * can be reused by every child.
+	 */
+	char store_root[512];
+	if (store_override) {
+		strncpy(store_root, store_override, sizeof(store_root) - 1);
+		store_root[sizeof(store_root) - 1] = '\0';
+	} else {
+		snprintf(store_root, sizeof(store_root), "%s/%u",
+			 DEFAULT_STORE, (unsigned)getuid());
 	}
 
 	log_debug("listening on %s%s", socket_path,
@@ -246,11 +266,21 @@ main(int argc, char **argv)
 
 		close(listen_fd);
 
-		assuan_context_t c;
-		if (server_init(&c, client_fd) != 0)
+		/*
+		 * store_root was computed above from getuid() (or --store) and
+		 * is inherited across fork; the daemon only ever serves the
+		 * account it runs as (peer_uid == getuid() is enforced above).
+		 */
+		session_t sess;
+		session_init(&sess, peer_uid, store_root);
+
+		assuan_context_t srv_ctx;
+		if (server_init(&srv_ctx, client_fd, &sess) != 0)
 			_exit(1);
-		server_run(c);
-		assuan_release(c);
+
+		server_run(srv_ctx);
+		assuan_release(srv_ctx);
+		session_destroy(&sess);
 		_exit(0);
 	}
 

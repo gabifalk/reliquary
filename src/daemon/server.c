@@ -18,7 +18,7 @@ register_commands(assuan_context_t ctx)
 }
 
 int
-server_init(assuan_context_t * ctx, int fd)
+server_init(assuan_context_t * ctx, int fd, session_t * sess)
 {
 	gpg_error_t err;
 	err = assuan_new(ctx);
@@ -31,6 +31,7 @@ server_init(assuan_context_t * ctx, int fd)
 		return -1;
 	}
 	assuan_set_hello_line(*ctx, "Reliquary daemon ready");
+	assuan_set_pointer(*ctx, sess);
 	register_commands(*ctx);
 	return 0;
 }
