@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 
 #include "server.h"
+#include "cmd_session.h"
 #include <string.h>
 
 static gpg_error_t
@@ -14,6 +15,16 @@ cmd_nop(assuan_context_t ctx, char *line)
 static void
 register_commands(assuan_context_t ctx)
 {
+	assuan_register_command(ctx, "OPEN_SESSION", cmd_open_session, NULL);
+	assuan_register_command(ctx, "CLOSE_SESSION", cmd_close_session, NULL);
+	assuan_register_command(ctx, "LOGIN", cmd_login, NULL);
+	assuan_register_command(ctx, "LOGOUT", cmd_logout, NULL);
+	assuan_register_command(ctx, "LIST_TOKENS", cmd_list_tokens, NULL);
+	assuan_register_command(ctx, "GET_MECHANISM_LIST",
+				cmd_get_mechanism_list, NULL);
+	assuan_register_command(ctx, "LIST_KEYS", cmd_list_keys, NULL);
+	assuan_register_command(ctx, "GET_ATTRIBUTE", cmd_get_attribute, NULL);
+	assuan_register_command(ctx, "SET_ATTRIBUTE", cmd_set_attribute, NULL);
 	assuan_register_command(ctx, "NOP", cmd_nop, NULL);
 }
 
