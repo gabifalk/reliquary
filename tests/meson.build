@@ -66,6 +66,14 @@ test('tokenstore', executable('test_tokenstore',
   dependencies: reliquary_core_dep,
 ))
 
+test('session', executable('test_session',
+  'test_session.c',
+  '../src/daemon/tokenstore.c',
+  '../src/daemon/session.c',
+  include_directories: [daemon_inc],
+  dependencies: reliquary_core_dep,
+))
+
 test('setgid_check', find_program('test_setgid_check.sh'),
   workdir: meson.project_build_root(),
 )
