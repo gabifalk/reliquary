@@ -8,3 +8,5 @@ conf_cflags = [
 subdir('core')
 subdir('daemon')
 subdir('setup')
+
+subdir('client')
