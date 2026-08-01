@@ -170,6 +170,19 @@ test('pkcs11', executable('test_pkcs11',
   dependencies: [reliquary_core_dep, reliquary_client_dep, libassuan_dep, gpg_error_dep],
 ))
 
+test_pkcs11_integration = executable('test_pkcs11_integration',
+  'test_pkcs11_integration.c',
+  include_directories: pkcs11_h_inc,
+  dependencies: [reliquary_client_dep, dependency('dl'), libassuan_dep, gpg_error_dep, libgcrypt_dep],
+)
+test('pkcs11_integration', test_pkcs11_integration,
+  env: [
+    'RELIQUARYD_PATH=' + reliquaryd.full_path(),
+    'RELIQUARY_PKCS11_PATH=' + reliquary_pkcs11_so.full_path(),
+    'RELIQUARY_TOOL_PATH=' + reliquary_tool.full_path(),
+  ],
+)
+
 test('pkcs11_tool',
   find_program('sh'),
   args: [
@@ -274,6 +287,13 @@ test('bcrypt_pbkdf', executable('test_bcrypt_pbkdf',
   dependencies: [bcrypt_dep, libgcrypt_dep],
 ))
 
+test('sshkey', executable('test_sshkey',
+  'test_sshkey.c',
+  '../src/tool/sshkey.c',
+  include_directories: [tool_inc],
+  dependencies: [reliquary_core_dep, libgcrypt_dep, bcrypt_dep],
+), timeout: 60)
+
 test('ssh_pkcs11',
   find_program('sh'),
   args: [
@@ -290,6 +310,28 @@ test('ssh_ed25519_pkcs11',
     files('test_ssh_ed25519_pkcs11.sh'),
     reliquaryd.full_path(),
     reliquary_pkcs11_so.full_path(),
+  ],
+  timeout: 60,
+)
+
+test('import_ssh',
+  find_program('sh'),
+  args: [
+    files('test_import_ssh.sh'),
+    reliquaryd.full_path(),
+    reliquary_tool.full_path(),
+    reliquary_pkcs11_so.full_path(),
+  ],
+  timeout: 60,
+)
+
+test('ssh_gpg_auth',
+  find_program('sh'),
+  args: [
+    files('test_ssh_gpg_auth.sh'),
+    reliquaryd.full_path(),
+    reliquary_tool.full_path(),
+    reliquary_scd_proxy.full_path(),
   ],
   timeout: 60,
 )

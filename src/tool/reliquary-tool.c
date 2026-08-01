@@ -2,6 +2,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 #include "client.h"
+#include "sshkey.h"
 #include "crypto.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -422,6 +423,157 @@ cmd_connect(assuan_context_t ctx, const char *label)
 	return 0;
 }
 
+/*
+ * Send IMPORT_SLOT and report the result. Returns 0 on success, 1 on error.
+ * Assumes the caller already performed LOGIN, which establishes the session
+ * master key that IMPORT_SLOT seals the key under.
+ */
+static int
+import_send(assuan_context_t ctx, int slot,
+	    const unsigned char *sexp, size_t sexp_len, const char *label,
+	    const char *algo, const char *slot_name)
+{
+	char cmd[512];
+	snprintf(cmd, sizeof(cmd), "IMPORT_SLOT %d", slot);
+	gpg_error_t err = client_command_with_data(ctx, cmd, sexp, sexp_len);
+	if (err) {
+		print_error(err);
+		return 1;
+	}
+	printf("Imported %s key into %s slot of '%s'.\n", algo, slot_name,
+	       label);
+	return 0;
+}
+
+/*
+ * import-ssh <label> <slot> <keyfile>   (import into an existing token's slot)
+ * import-ssh <label> <keyfile>          (create a new token, auth slot)
+ */
+static int
+cmd_import_ssh(assuan_context_t ctx, int argc, char **argv)
+{
+	const char *label, *keyfile;
+	const char *slot_name;
+	int slot, new_token;
+
+	if (argc == 3) {
+		label = argv[0];
+		slot_name = argv[1];
+		keyfile = argv[2];
+		new_token = 0;
+		if (strcmp(slot_name, "sign") == 0)
+			slot = 0;
+		else if (strcmp(slot_name, "encrypt") == 0)
+			slot = 1;
+		else if (strcmp(slot_name, "auth") == 0)
+			slot = 2;
+		else {
+			fprintf(stderr, "Error: unknown slot '%s'"
+				" (use sign, encrypt, or auth)\n", slot_name);
+			return 1;
+		}
+	} else if (argc == 2) {
+		label = argv[0];
+		keyfile = argv[1];
+		slot_name = "auth";
+		slot = 2;
+		new_token = 1;
+	} else {
+		fprintf(stderr,
+			"Usage: reliquary-tool import-ssh <label> <slot> <keyfile>\n"
+			"       reliquary-tool import-ssh <label> <keyfile>\n");
+		return 1;
+	}
+
+	if (require_store_init(ctx))
+		return 1;
+
+	/* Convert the SSH key to a gcrypt private-key S-expression. */
+	char passphrase[256];
+	const char *pass = NULL;
+	int enc = sshkey_is_encrypted(keyfile);
+	if (enc < 0) {
+		fprintf(stderr, "Error: cannot read '%s' as an OpenSSH key\n",
+			keyfile);
+		return 1;
+	}
+	if (enc == 1) {
+		if (read_pin("SSH key passphrase: ", passphrase,
+			     sizeof(passphrase)) != 0)
+			return 1;
+		pass = passphrase;
+	}
+
+	unsigned char *sexp = NULL;
+	size_t sexp_len = 0;
+	char *algo = NULL;
+	if (sshkey_load(keyfile, pass, &sexp, &sexp_len, &algo) != 0) {
+		fprintf(stderr, "Error: failed to load key"
+			" (unsupported type, or wrong passphrase)\n");
+		return 1;
+	}
+
+	int rc = 1;
+	char cmd[512];
+	gpg_error_t err;
+
+	if (new_token) {
+		char admin_pin[256], pin[256], pin2[256];
+		if (read_pin("Admin PIN: ", admin_pin, sizeof(admin_pin)) != 0)
+			goto done;
+		if (read_pin("New token PIN: ", pin, sizeof(pin)) != 0)
+			goto done;
+		if (read_pin("Confirm token PIN: ", pin2, sizeof(pin2)) != 0)
+			goto done;
+		if (strcmp(pin, pin2) != 0) {
+			fprintf(stderr, "Error: PINs do not match\n");
+			goto done;
+		}
+		char create[1024];
+		snprintf(create, sizeof(create), "CREATE_TOKEN %s %s %s",
+			 label, pin, admin_pin);
+		err = client_command_ok(ctx, create);
+		if (err) {
+			print_error(err);
+			goto done;
+		}
+		snprintf(cmd, sizeof(cmd), "OPEN_SESSION %s", label);
+		if (client_command_ok(ctx, cmd))
+			goto done;
+		snprintf(cmd, sizeof(cmd), "LOGIN %s", pin);
+		if (client_command_ok(ctx, cmd))
+			goto done;
+		rc = import_send(ctx, slot, sexp, sexp_len, label, algo,
+				 slot_name);
+	} else {
+		char pin[256];
+		snprintf(cmd, sizeof(cmd), "OPEN_SESSION %s", label);
+		err = client_command_ok(ctx, cmd);
+		if (err) {
+			fprintf(stderr, "Error: token '%s' not found: %s\n",
+				label, gpg_strerror(err));
+			goto done;
+		}
+		if (read_pin("Token PIN: ", pin, sizeof(pin)) != 0)
+			goto done;
+		snprintf(cmd, sizeof(cmd), "LOGIN %s", pin);
+		err = client_command_ok(ctx, cmd);
+		if (err) {
+			fprintf(stderr, "Error: wrong PIN: %s\n",
+				gpg_strerror(err));
+			goto done;
+		}
+		rc = import_send(ctx, slot, sexp, sexp_len, label, algo,
+				 slot_name);
+	}
+
+ done:
+	client_command_ok(ctx, "LOGOUT");
+	free(sexp);
+	free(algo);
+	return rc;
+}
+
 static void
 usage(void)
 {
@@ -437,6 +589,8 @@ usage(void)
 		"  clear <label>                       Clear key slots from a token\n");
 	fprintf(stderr,
 		"  genkey <label> <slot> <algo>        Generate a key in a slot\n");
+	fprintf(stderr,
+		"  import-ssh <label> [slot] <keyfile>  Import an OpenSSH private key\n");
 	fprintf(stderr, "  list                                List tokens\n");
 	fprintf(stderr,
 		"  info <label>                        Show token details\n");
@@ -497,6 +651,8 @@ main(int argc, char **argv)
 			rc = cmd_clear(ctx, argv[2]);
 	} else if (strcmp(argv[1], "genkey") == 0)
 		rc = cmd_genkey(ctx, argc - 2, argv + 2);
+	else if (strcmp(argv[1], "import-ssh") == 0)
+		rc = cmd_import_ssh(ctx, argc - 2, argv + 2);
 	else if (strcmp(argv[1], "list") == 0)
 		rc = cmd_list(ctx);
 	else if (strcmp(argv[1], "info") == 0) {
