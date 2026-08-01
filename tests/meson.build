@@ -102,6 +102,11 @@ test('useradd',
   args: [files('test_useradd.sh'), useradd_script],
 )
 
+test('scd_proxy_version', find_program('test_scd_proxy_version.sh'),
+  workdir: meson.project_build_root(),
+  env: {'MESON_BUILD_ROOT': meson.project_build_root()},
+)
+
 daemon_test_inc = include_directories('../src/daemon')
 
 test('tools', executable('test_tools',
@@ -172,6 +177,95 @@ test('pkcs11_tool',
     reliquaryd.full_path(),
     reliquary_pkcs11_so.full_path(),
   ],
+  timeout: 60,
+)
+
+test('gpg_scd',
+  find_program('sh'),
+  args: [
+    files('test_gpg_scd.sh'),
+    reliquaryd.full_path(),
+    reliquary_scd_proxy.full_path(),
+    files('data/fixture_key.gpg'),
+  ],
+  timeout: 60,
+)
+
+# Regression test for chunked SETDATA (SETDATA --append) reassembly in the
+# scd-proxy: rsa4096 card decryption used to fail with "Invalid value".
+test('scd_proxy_setdata',
+  find_program('sh'),
+  args: [
+    files('test_scd_proxy_setdata.sh'),
+    reliquaryd.full_path(),
+    reliquary_scd_proxy.full_path(),
+    files('data/fixture_rsa4096.key'),
+  ],
+  timeout: 60,
+)
+
+# Regression test: scd-proxy LEARN must not report a keygrip as a KEY-FPR
+# fingerprint when a slot has no fingerprint.
+test('scd_proxy_learn',
+  find_program('sh'),
+  args: [
+    files('test_scd_proxy_learn.sh'),
+    reliquaryd.full_path(),
+    reliquary_scd_proxy.full_path(),
+    files('data/fixture_rsa4096.key'),
+  ],
+  timeout: 60,
+)
+
+test('openpgp_fpr_ec',
+  find_program('sh'),
+  args: [
+    files('test_openpgp_fpr_ec.sh'),
+    reliquaryd.full_path(),
+    reliquary_scd_proxy.full_path(),
+  ],
+  timeout: 90,
+)
+
+keytocard_script = files('test_keytocard.sh')
+keytocard_common_args = [
+  keytocard_script,
+  reliquaryd.full_path(),
+  reliquary_scd_proxy.full_path(),
+  files('data/fixture_key.gpg'),
+]
+
+# 1-of combinations
+test('keytocard_sign_only', find_program('sh'),
+  args: keytocard_common_args + ['sign_only', 'sign'],
+  timeout: 60,
+)
+test('keytocard_encr_only', find_program('sh'),
+  args: keytocard_common_args + ['encr_only', 'encr'],
+  timeout: 60,
+)
+test('keytocard_auth_only', find_program('sh'),
+  args: keytocard_common_args + ['auth_only', 'auth'],
+  timeout: 60,
+)
+
+# 2-of combinations
+test('keytocard_sign_encr', find_program('sh'),
+  args: keytocard_common_args + ['sign_encr', 'sign', 'encr'],
+  timeout: 60,
+)
+test('keytocard_sign_auth', find_program('sh'),
+  args: keytocard_common_args + ['sign_auth', 'sign', 'auth'],
+  timeout: 60,
+)
+test('keytocard_encr_auth', find_program('sh'),
+  args: keytocard_common_args + ['encr_auth', 'encr', 'auth'],
+  timeout: 60,
+)
+
+# 3-of combination
+test('keytocard_all_three', find_program('sh'),
+  args: keytocard_common_args + ['all_three', 'sign', 'encr', 'auth'],
   timeout: 60,
 )
 

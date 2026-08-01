@@ -3,6 +3,7 @@
 conf_cflags = [
   '-DDEFAULT_STORE="' + get_option('store_dir') + '"',
   '-DRELIQUARY_GROUP="' + get_option('group') + '"',
+  '-DRELIQUARY_VERSION="' + meson.project_version() + '"',
 ]
 
 subdir('bundled')
@@ -13,3 +14,4 @@ subdir('setup')
 subdir('client')
 subdir('tool')
 subdir('pkcs11')
+subdir('scd')
