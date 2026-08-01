@@ -34,6 +34,11 @@ test('crypto_ec', executable('test_crypto_ec',
   dependencies: reliquary_core_dep,
 ))
 
+test('serial', executable('test_serial',
+  'test_serial.c',
+  dependencies: reliquary_core_dep,
+))
+
 test('setgid_check', find_program('test_setgid_check.sh'),
   workdir: meson.project_build_root(),
 )

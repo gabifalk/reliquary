@@ -7,6 +7,7 @@ reliquary_core_sources = files(
   'hex.c',
   'log.c',
   'secmem.c',
+  'serial.c',
 )
 
 reliquary_core_inc = include_directories('.')
