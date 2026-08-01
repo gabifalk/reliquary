@@ -2,13 +2,21 @@
 
 #define _POSIX_C_SOURCE 200809L
 #include "cmd_admin.h"
+#include "cmd_session.h"
 #include "session.h"
 #include "tokenstore.h"
+#include "crypto_op.h"
+#include "openpgp_fpr.h"
+#include "keygrip.h"
+#include "keyfile.h"
 #include "meta.h"
 #include "hex.h"
 #include "pin.h"
 #include "keywrap.h"
 #include "crypto.h"
+#include "crypto_rsa.h"
+#include "crypto_ec.h"
+#include "secmem.h"
 #include "log.h"
 #include <gcrypt.h>
 #include <gpg-error.h>
@@ -465,6 +473,301 @@ cmd_create_token(assuan_context_t ctx, char *line)
 	}
 
 	log_debug("CREATE_TOKEN token=%s -> ok", label);
+	return 0;
+}
+
+/*
+ * Build the comma-separated allowed-mechanism list for (algo, slot): the
+ * default set from mechpolicy_default_set(), plus any caller-supplied
+ * additions (a comma-separated dotted-token list) not already present in the
+ * default set. additions may be NULL or empty, in which case the plain
+ * default set is returned. Returns a malloc'd string (caller frees, via
+ * free()), or NULL on allocation failure.
+ */
+static char *
+mechpolicy_merge(const char *algo, int slot, const char *additions)
+{
+	const char *def = mechpolicy_default_set(algo, slot);
+
+	size_t cap = strlen(def) + 1;
+	char *result = malloc(cap);
+	if (!result)
+		return NULL;
+	strcpy(result, def);
+
+	if (!additions || !*additions)
+		return result;
+
+	char *dup = strdup(additions);
+	if (!dup) {
+		free(result);
+		return NULL;
+	}
+
+	char *save = NULL;
+	for (char *tok = strtok_r(dup, ",", &save); tok;
+	     tok = strtok_r(NULL, ",", &save)) {
+		while (*tok == ' ')
+			tok++;
+		size_t tlen = strlen(tok);
+		while (tlen > 0 && tok[tlen - 1] == ' ')
+			tok[--tlen] = '\0';
+		if (tlen == 0)
+			continue;
+
+		/* Skip if already present as a whole comma-separated field. */
+		int present = 0;
+		for (const char *p = result; *p;) {
+			const char *q = strchr(p, ',');
+			size_t seglen = q ? (size_t)(q - p) : strlen(p);
+			if (seglen == tlen && strncmp(p, tok, tlen) == 0) {
+				present = 1;
+				break;
+			}
+			p = q ? q + 1 : p + seglen;
+		}
+		if (present)
+			continue;
+
+		size_t oldlen = strlen(result);
+		size_t newcap = oldlen + (oldlen ? 1 : 0) + tlen + 1;
+		char *grown = realloc(result, newcap);
+		if (!grown) {
+			free(dup);
+			free(result);
+			return NULL;
+		}
+		result = grown;
+		if (oldlen)
+			strcat(result, ",");
+		strcat(result, tok);
+	}
+	free(dup);
+	return result;
+}
+
+/*
+ * Validate a private-key S-expression, PIN-encrypt it into the given slot's
+ * key file, and update that slot's metadata (algorithm + public key).
+ * Auto-detects the algorithm from the S-expression.  Does NOT create or
+ * remove the token directory and does NOT touch session state.
+ *
+ * Also sets this slot's allowed_mechs metadata to mechpolicy_default_set()
+ * for the detected (algo, slot), merged with additions (a comma-separated
+ * dotted-token list; may be NULL/empty for just the default set).
+ *
+ * On success algo_out (>=64 bytes) receives the detected algorithm name.
+ * Returns 0 on success, or a gpg_error_t on failure.
+ */
+gpg_error_t
+store_key_into_slot(const char *store_path, const char *label, int slot,
+		    const unsigned char *keydata, size_t keydata_len,
+		    const unsigned char *mk, const char *additions,
+		    char algo_out[64])
+{
+	if (slot < 0 || slot >= RELIQUARY_NUM_SLOTS)
+		return gpg_error(GPG_ERR_INV_VALUE);
+
+	gcry_sexp_t sexp = NULL;
+	if (gcry_sexp_new(&sexp, keydata, keydata_len, 0) != 0)
+		return gpg_error(GPG_ERR_BAD_KEY);
+
+	/* Detect algorithm from the S-expression. */
+	const char *algo = "rsa2048";
+	gcry_sexp_t rsa_node = gcry_sexp_find_token(sexp, "rsa", 0);
+	if (rsa_node) {
+		gcry_sexp_t n_node = gcry_sexp_find_token(rsa_node, "n", 0);
+		if (n_node) {
+			gcry_mpi_t n = gcry_sexp_nth_mpi(n_node, 1,
+							 GCRYMPI_FMT_USG);
+			if (n) {
+				unsigned int nbits = gcry_mpi_get_nbits(n);
+				if (nbits < 2048) {
+					gcry_mpi_release(n);
+					gcry_sexp_release(n_node);
+					gcry_sexp_release(rsa_node);
+					gcry_sexp_release(sexp);
+					return gpg_error(GPG_ERR_NOT_SUPPORTED);
+				} else if (nbits <= 2048)
+					algo = "rsa2048";
+				else if (nbits <= 3072)
+					algo = "rsa3072";
+				else
+					algo = "rsa4096";
+				gcry_mpi_release(n);
+			}
+			gcry_sexp_release(n_node);
+		}
+		gcry_sexp_release(rsa_node);
+	} else {
+		gcry_sexp_t ecc = gcry_sexp_find_token(sexp, "ecc", 0);
+		if (!ecc) {
+			gcry_sexp_release(sexp);
+			return gpg_error(GPG_ERR_NOT_SUPPORTED);
+		}
+		gcry_sexp_t curve = gcry_sexp_find_token(ecc, "curve", 0);
+		size_t clen = 0;
+		const char *cname = curve
+		    ? gcry_sexp_nth_data(curve, 1, &clen) : NULL;
+		if (cname && clen == 10
+		    && strncmp(cname, "NIST P-256", 10) == 0)
+			algo = "nistp256";
+		else if (cname && clen == 10
+			 && strncmp(cname, "NIST P-384", 10) == 0)
+			algo = "nistp384";
+		else if (cname && clen == 10
+			 && strncmp(cname, "NIST P-521", 10) == 0)
+			algo = "nistp521";
+		else if (cname && clen == 7
+			 && strncmp(cname, "Ed25519", 7) == 0)
+			algo = "ed25519";
+		else {
+			/*
+			 * Unknown or unsupported curve (e.g. Ed448): reject
+			 * rather than silently storing it under the wrong
+			 * algorithm.
+			 */
+			gcry_sexp_release(curve);
+			gcry_sexp_release(ecc);
+			gcry_sexp_release(sexp);
+			return gpg_error(GPG_ERR_NOT_SUPPORTED);
+		}
+		gcry_sexp_release(curve);
+		gcry_sexp_release(ecc);
+	}
+
+	/*
+	 * OpenPGP key creation time: gpg's WRITEKEY S-expression carries it as
+	 * (created-at <unix-seconds>).  Needed for the v4 fingerprint and shown
+	 * by gpg --card-status; absent for keys imported by other means.
+	 */
+	uint32_t created = 0;
+	char created_str[32];
+	created_str[0] = '\0';
+	gcry_sexp_t ca = gcry_sexp_find_token(sexp, "created-at", 0);
+	if (ca) {
+		size_t dl = 0;
+		const char *dv = gcry_sexp_nth_data(ca, 1, &dl);
+		if (dv && dl > 0 && dl < sizeof(created_str)) {
+			memcpy(created_str, dv, dl);
+			created_str[dl] = '\0';
+			created = (uint32_t)strtoul(created_str, NULL, 10);
+		}
+		gcry_sexp_release(ca);
+	}
+
+	/*
+	 * Serialize to canonical form for storage.  This is the private key in
+	 * the clear, so hold it in locked secure memory (freed via secure_free
+	 * below) rather than swappable heap.
+	 */
+	size_t canon_len = gcry_sexp_sprint(sexp, GCRYSEXP_FMT_CANON, NULL, 0);
+	unsigned char *canon = secure_alloc(canon_len);
+	if (!canon) {
+		gcry_sexp_release(sexp);
+		return gpg_error(GPG_ERR_ENOMEM);
+	}
+	canon_len = gcry_sexp_sprint(sexp, GCRYSEXP_FMT_CANON, canon, canon_len);
+	gcry_sexp_release(sexp);
+
+	/* Extract public key. */
+	unsigned char *pubkey = NULL;
+	size_t pubkey_len = 0;
+	int rc;
+	if (strncmp(algo, "rsa", 3) == 0)
+		rc = crypto_rsa_extract_pubkey(canon, canon_len, &pubkey,
+					       &pubkey_len);
+	else
+		rc = crypto_ec_extract_pubkey(canon, canon_len, &pubkey,
+					      &pubkey_len);
+	if (rc != 0) {
+		secure_free(canon, canon_len);
+		return gpg_error(GPG_ERR_BAD_KEY);
+	}
+
+	/*
+	 * Reject keys whose keygrip cannot be computed. gcry_pk_get_keygrip()
+	 * abort()s on some malformed public keys; validating here (fork-guarded)
+	 * keeps such a key out of the store, so the read path (GET_ATTRIBUTE
+	 * keygrip / LIST_KEYS -> compute_keygrip) never runs into that abort.
+	 */
+	if (keygrip_computable(pubkey, pubkey_len) != 0) {
+		free(pubkey);
+		secure_free(canon, canon_len);
+		return gpg_error(GPG_ERR_BAD_KEY);
+	}
+
+	static const char *slot_key_names[] = {
+		"sign.key.enc", "encrypt.key.enc", "auth.key.enc"
+	};
+	char tpath[512], kpath[768], mpath[768];
+	tokenstore_token_path(store_path, label, tpath, sizeof(tpath));
+	snprintf(kpath, sizeof(kpath), "%s/%s", tpath, slot_key_names[slot]);
+	snprintf(mpath, sizeof(mpath), "%s/metadata", tpath);
+
+	rc = keyfile_seal(kpath, mk, canon, canon_len);
+	secure_free(canon, canon_len);
+	if (rc != 0) {
+		free(pubkey);
+		return gpg_error(GPG_ERR_GENERAL);
+	}
+
+	/*
+	 * Derive the OpenPGP v4 fingerprint from the freshly imported key so
+	 * gpg --card-status shows a real fingerprint (and can bind General key
+	 * info) instead of [none].
+	 */
+	char fpr_hex[41];
+	int have_fpr = created
+	    && openpgp_v4_fpr(algo, slot, created, pubkey, pubkey_len,
+			      fpr_hex, sizeof(fpr_hex)) == 0;
+
+	char *pub_hex = hex_encode(pubkey, pubkey_len);
+	free(pubkey);
+
+	/* Read existing metadata (if any) and update just this slot. */
+	token_meta_t m = { 0 };
+	int new_token = 0;
+	if (meta_read(mpath, &m) != 0) {
+		m.version = META_VERSION;
+		m.label = (char *)label;
+		m.created_at = "imported";
+		m.pin_max_retries = 3;
+		new_token = 1;
+	}
+	char *merged_mechs = mechpolicy_merge(algo, slot, additions);
+
+	free(m.algorithm[slot]);
+	free(m.public_key_hex[slot]);
+	free(m.allowed_mechs[slot]);
+	m.algorithm[slot] = (char *)algo;
+	m.public_key_hex[slot] = pub_hex;
+	m.allowed_mechs[slot] = merged_mechs;
+	if (have_fpr) {
+		free(m.key_fpr_hex[slot]);
+		m.key_fpr_hex[slot] = strdup(fpr_hex);
+	}
+	if (created_str[0]) {
+		free(m.key_time[slot]);
+		m.key_time[slot] = strdup(created_str);
+	}
+	rc = meta_write(mpath, &m);
+	m.algorithm[slot] = NULL;
+	m.public_key_hex[slot] = NULL;
+	m.allowed_mechs[slot] = NULL;
+	meta_free(&m);
+	free(pub_hex);
+	free(merged_mechs);
+	if (rc != 0)
+		return gpg_error(GPG_ERR_GENERAL);
+
+	if (new_token) {
+		token_state_t st = { .pin_retries = 3, .disconnected = 0 };
+		state_write(tpath, &st);
+	}
+
+	strncpy(algo_out, algo, 63);
+	algo_out[63] = '\0';
 	return 0;
 }
 
