@@ -269,6 +269,11 @@ test('keytocard_all_three', find_program('sh'),
   timeout: 60,
 )
 
+test('bcrypt_pbkdf', executable('test_bcrypt_pbkdf',
+  'test_bcrypt_pbkdf.c',
+  dependencies: [bcrypt_dep, libgcrypt_dep],
+))
+
 test('ssh_pkcs11',
   find_program('sh'),
   args: [

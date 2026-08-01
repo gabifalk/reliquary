@@ -5,3 +5,29 @@ pkcs11.h
   PKCS#11 consolidated header from the p11-kit project.
   Source: https://github.com/p11-glue/p11-kit/blob/master/common/pkcs11.h
   License: FSFAP (FSF All Permissive License)
+
+blf.h, blowfish.c, bcrypt_pbkdf.c
+  OpenBSD Blowfish cipher and bcrypt_pbkdf(3) key derivation function,
+  vendored unmodified (byte-identical) for in-memory decryption of
+  passphrase-protected OpenSSH private keys.
+  Source: https://github.com/openssh/openssh-portable
+  Path:   openbsd-compat/{blf.h,blowfish.c,bcrypt_pbkdf.c}
+  Tag:    V_10_4_P1
+  License: blf.h, blowfish.c - 3-clause BSD-style (Niels Provos);
+           bcrypt_pbkdf.c - ISC (Ted Unangst)
+  sha256:
+    8c110caed5a31a330c8f60d942e9a4fbf42860ec575484c5ad509379d09379f6  blf.h
+    c1ce17befab237bb2e360dd0cf58f0123f27ac4d2458b8db4cc27775c9db403c  blowfish.c
+    37eb9b8c19d1090a144fcd601360038a56d5379a8f51d0f7d091d74a727a5e4c  bcrypt_pbkdf.c
+
+  Reliquary-authored shims (GPL-2.0-or-later, not part of the upstream
+  vendoring above) build the vendored code against glibc and libgcrypt:
+    includes.h     - minimal glibc compatibility shim (freezero(), etc.)
+                      included by blf.h/blowfish.c/bcrypt_pbkdf.c as
+                      "includes.h".
+    crypto_api.h    - declares crypto_hash_sha512(), the SHA-512 hook
+                      bcrypt_pbkdf.c expects.
+    crypto_shim.c   - implements crypto_hash_sha512() on top of
+                      libgcrypt's gcry_md_hash_buffer(GCRY_MD_SHA512, ...).
+    bcrypt_pbkdf.h  - public prototype for bcrypt_pbkdf(), exposed via the
+                      `bcrypt_dep` Meson dependency.

@@ -1,0 +1,3 @@
+src/bundled/bcrypt_pbkdf/blf.h whitespace=-blank-at-eof
+src/bundled/bcrypt_pbkdf/blowfish.c whitespace=-blank-at-eof
+src/bundled/bcrypt_pbkdf/bcrypt_pbkdf.c whitespace=-blank-at-eof
