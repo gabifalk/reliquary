@@ -14,6 +14,11 @@ test('log', executable('test_log',
   dependencies: reliquary_core_dep,
 ))
 
+test('crypto', executable('test_crypto',
+  'test_crypto.c',
+  dependencies: reliquary_core_dep,
+))
+
 test('setgid_check', find_program('test_setgid_check.sh'),
   workdir: meson.project_build_root(),
 )

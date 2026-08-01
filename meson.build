@@ -11,6 +11,7 @@ project('reliquary', 'c',
 
 cc = meson.get_compiler('c')
 
+libgcrypt_dep = dependency('libgcrypt', version: '>=1.10.0')
 libassuan_dep = dependency('libassuan', version: '>=2.5.0')
 
 subdir('src')
