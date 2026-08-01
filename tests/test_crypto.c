@@ -30,8 +30,50 @@ TEST(test_random_distinct)
 	ASSERT(memcmp(a, b, sizeof(a)) != 0);
 }
 
+TEST(test_kdf_deterministic)
+{
+	const char *pin = "1234";
+	unsigned char salt[CRYPTO_KDF_SALT_LEN];
+	memset(salt, 0x42, sizeof(salt));
+
+	unsigned char key1[CRYPTO_GCM_KEY_LEN];
+	unsigned char key2[CRYPTO_GCM_KEY_LEN];
+	ASSERT_EQ(crypto_kdf_derive(pin, 4, salt, key1, sizeof(key1)), 0);
+	ASSERT_EQ(crypto_kdf_derive(pin, 4, salt, key2, sizeof(key2)), 0);
+	ASSERT_MEM_EQ(key1, key2, sizeof(key1));
+}
+
+TEST(test_kdf_different_pin_different_key)
+{
+	unsigned char salt[CRYPTO_KDF_SALT_LEN];
+	memset(salt, 0x42, sizeof(salt));
+
+	unsigned char key1[CRYPTO_GCM_KEY_LEN];
+	unsigned char key2[CRYPTO_GCM_KEY_LEN];
+	ASSERT_EQ(crypto_kdf_derive("1234", 4, salt, key1, sizeof(key1)), 0);
+	ASSERT_EQ(crypto_kdf_derive("5678", 4, salt, key2, sizeof(key2)), 0);
+	ASSERT(memcmp(key1, key2, sizeof(key1)) != 0);
+}
+
+TEST(test_kdf_different_salt_different_key)
+{
+	const char *pin = "1234";
+	unsigned char salt1[CRYPTO_KDF_SALT_LEN], salt2[CRYPTO_KDF_SALT_LEN];
+	memset(salt1, 0x01, sizeof(salt1));
+	memset(salt2, 0x02, sizeof(salt2));
+
+	unsigned char key1[CRYPTO_GCM_KEY_LEN];
+	unsigned char key2[CRYPTO_GCM_KEY_LEN];
+	ASSERT_EQ(crypto_kdf_derive(pin, 4, salt1, key1, sizeof(key1)), 0);
+	ASSERT_EQ(crypto_kdf_derive(pin, 4, salt2, key2, sizeof(key2)), 0);
+	ASSERT(memcmp(key1, key2, sizeof(key1)) != 0);
+}
+
 TEST_MAIN_BEGIN("test_crypto")
     RUN(test_init);
 RUN(test_random_fills_buffer);
 RUN(test_random_distinct);
+RUN(test_kdf_deterministic);
+RUN(test_kdf_different_pin_different_key);
+RUN(test_kdf_different_salt_different_key);
 TEST_MAIN_END
