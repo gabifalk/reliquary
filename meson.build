@@ -11,5 +11,7 @@ project('reliquary', 'c',
 
 cc = meson.get_compiler('c')
 
+libassuan_dep = dependency('libassuan', version: '>=2.5.0')
+
 subdir('src')
 subdir('tests')
