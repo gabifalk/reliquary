@@ -103,11 +103,29 @@ test('daemon', executable('test_daemon',
   dependencies: [reliquary_core_dep, libassuan_dep, gpg_error_dep],
 ))
 
+test('log_lines', executable('test_log_lines',
+  'test_log_lines.c',
+  daemon_sources,
+  include_directories: daemon_inc,
+  dependencies: [reliquary_core_dep, libgcrypt_dep, libassuan_dep, gpg_error_dep],
+))
+
+test('secret_safety', executable('test_secret_safety',
+  'test_secret_safety.c',
+  daemon_sources,
+  include_directories: daemon_inc,
+  dependencies: [reliquary_core_dep, libgcrypt_dep, libassuan_dep, gpg_error_dep],
+))
+
 test('setgid_check', find_program('test_setgid_check.sh'),
   workdir: meson.project_build_root(),
 )
 
 test('socket_activation', find_program('test_socket_activation.sh'),
+  workdir: meson.project_build_root(),
+)
+
+test('verbosity', find_program('test_verbosity.sh'),
   workdir: meson.project_build_root(),
 )
 
