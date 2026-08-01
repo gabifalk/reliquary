@@ -1,0 +1,38 @@
+Source: reliquary
+Section: utils
+Priority: optional
+Maintainer: Gabi Falk <gbifalk@gmail.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ meson (>= 1.1),
+ ninja-build,
+ pkgconf,
+ libgcrypt20-dev (>= 1.10.0),
+ libassuan-dev (>= 2.5.0),
+ libgpg-error-dev,
+ gnupg <!nocheck>,
+ openssh-client <!nocheck>,
+ opensc <!nocheck>,
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/gabifalk/reliquary
+Vcs-Browser: https://github.com/gabifalk/reliquary
+Vcs-Git: https://github.com/gabifalk/reliquary.git
+
+Package: reliquary
+Architecture: any
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ adduser,
+Recommends: openssh-client
+Suggests: gnupg
+Description: HSM-like software isolation for cryptographic keys
+ Reliquary is a setgid daemon that provides hardware-security-module-like
+ isolation for private keys in software. Keys live in a group-owned store
+ that only the setgid daemon can read; clients talk to it over a per-user
+ socket and never touch key material directly.
+ .
+ This package ships the daemon (reliquaryd), the administration tool
+ (reliquary-tool), a scdaemon-compatible proxy for GnuPG, a PKCS#11
+ provider module, and systemd user units for on-demand activation.

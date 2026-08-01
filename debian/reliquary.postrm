@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        if dpkg-statoverride --list /usr/bin/reliquaryd >/dev/null 2>&1; then
+            dpkg-statoverride --remove /usr/bin/reliquaryd
+        fi
+        if dpkg-statoverride --list /var/lib/reliquary >/dev/null 2>&1; then
+            dpkg-statoverride --remove /var/lib/reliquary
+        fi
+        # Remove the store dir only if empty; leave user data otherwise.
+        [ -d /var/lib/reliquary ] && rmdir /var/lib/reliquary 2>/dev/null || true
+        # The reliquary system group is intentionally left in place; it may
+        # still own store files created after install.
+        ;;
+
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,33 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # System group owning the token store; daemon runs setgid to it.
+        if ! getent group reliquary >/dev/null; then
+            addgroup --system reliquary
+        fi
+
+        # Daemon must be setgid reliquary to reach the group-owned store.
+        if ! dpkg-statoverride --list /usr/bin/reliquaryd >/dev/null 2>&1; then
+            dpkg-statoverride --update --add root reliquary 2755 /usr/bin/reliquaryd
+        fi
+
+        # Store directory: root-owned, group-readable, not world-accessible.
+        if ! dpkg-statoverride --list /var/lib/reliquary >/dev/null 2>&1; then
+            dpkg-statoverride --update --add root reliquary 0710 /var/lib/reliquary
+        fi
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
