@@ -10,3 +10,6 @@ project('reliquary', 'c',
 )
 
 cc = meson.get_compiler('c')
+
+subdir('src')
+subdir('tests')
