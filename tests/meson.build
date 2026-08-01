@@ -49,6 +49,11 @@ test('keyfile', executable('test_keyfile',
   dependencies: reliquary_core_dep,
 ))
 
+test('meta', executable('test_meta',
+  'test_meta.c',
+  dependencies: reliquary_core_dep,
+))
+
 test('setgid_check', find_program('test_setgid_check.sh'),
   workdir: meson.project_build_root(),
 )
