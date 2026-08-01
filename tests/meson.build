@@ -156,3 +156,41 @@ test('unblock_tool',
   ],
   timeout: 60,
 )
+
+test('pkcs11', executable('test_pkcs11',
+  'test_pkcs11.c',
+  '../src/pkcs11/reliquary-pkcs11.c',
+  daemon_sources,
+  include_directories: [pkcs11_h_inc, daemon_test_inc],
+  dependencies: [reliquary_core_dep, reliquary_client_dep, libassuan_dep, gpg_error_dep],
+))
+
+test('pkcs11_tool',
+  find_program('sh'),
+  args: [
+    files('test_pkcs11_tool.sh'),
+    reliquaryd.full_path(),
+    reliquary_pkcs11_so.full_path(),
+  ],
+  timeout: 60,
+)
+
+test('ssh_pkcs11',
+  find_program('sh'),
+  args: [
+    files('test_ssh_pkcs11.sh'),
+    reliquaryd.full_path(),
+    reliquary_pkcs11_so.full_path(),
+  ],
+  timeout: 60,
+)
+
+test('ssh_ed25519_pkcs11',
+  find_program('sh'),
+  args: [
+    files('test_ssh_ed25519_pkcs11.sh'),
+    reliquaryd.full_path(),
+    reliquary_pkcs11_so.full_path(),
+  ],
+  timeout: 60,
+)

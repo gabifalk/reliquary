@@ -12,3 +12,4 @@ subdir('setup')
 
 subdir('client')
 subdir('tool')
+subdir('pkcs11')

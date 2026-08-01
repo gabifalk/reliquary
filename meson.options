@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-
 option('store_dir', type: 'string', value: '/var/lib/reliquary',
   description: 'Default token store directory')
 option('group', type: 'string', value: 'reliquary',
   description: 'System group for store directory ownership')
+option('pkcs11_moduledir', type: 'string', value: '',
+  description: 'Install dir for the PKCS#11 module (default: <libdir>/pkcs11)')
